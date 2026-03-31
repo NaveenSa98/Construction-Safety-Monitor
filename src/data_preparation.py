@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BASE_DATASET_PATH = PROJECT_ROOT/ "data"/"raw"/"base_dataset"
 GOGGLES_DATASET_PATH  = PROJECT_ROOT / "data" / "raw" / "goggles_dataset"
 FOOTWEAR_DATASET_PATH = PROJECT_ROOT / "data" / "raw" / "footwear_dataset"
+PPE_DATASET_PATH = PROJECT_ROOT / "data" / "raw" / "ppe_dataset"
 GLOVES_DATASET_PATH   = PROJECT_ROOT / "data" / "raw" / "gloves_dataset"
 
 OUTPUT_PATH = PROJECT_ROOT/ "data"/"processed"
@@ -27,7 +28,7 @@ RANDOM_SEED = 42
 # Name class list
 
 CLASS_NAMES = [
-    "Person",
+    "Person", 
     "Hardhat",
     "NO-Hardhat",
     "Safety Vest",
@@ -37,44 +38,47 @@ CLASS_NAMES = [
     "Safety Boots",
     "NO-Safety Boots",
     "Safety Goggles",
-    "Safety Harness",
     "NO-Safety Goggles",
+    "Safety Harness",
     "NO-Safety Harness",
 ]
 
 # Class remapping for YOLOv8 (0-indexed)
 
 BASE_CLASS_MAPPING = {
-    5: 0,  # Person
-    0: 1,  # Hardhat
-    2: 2,  # NO-Hardhat
-    7: 3,  # Safety Vest
-    4: 4,  # NO-Safety Vest
+    5:0,  # Person
+    0:1,  # Hardhat
+    2:2,  # NO-Hardhat
+    7:3,  # Safety Vest
+    4:4,  # NO-Safety Vest
 
 }
 
 GOGGLES_CLASS_MAPPING = {
-    9: 0,    # Goggles 
+    0:9,    # Goggles 
+   1:10,    # NO-Goggles 
 }
 
 SAFETY_PPE_MAPPING = {
-    8: 0,   # Safety Gloves       
-    9: 1,   # Safety Goggles         
-    1: 2,   # Hardhat          
-    10: 3,  # NO-Safety Gloves             
-    2: 4,   # No_Hardhat        
-    6: 5,   # No_Safety Boots         
-    0: 6,   # Person           
-    7: 7,   # Safety_Harness  
-    5: 8,   # Safety Boots 
-    11: 9,  # NO-Safety Goggles
-    12:10,  # NO-Safety Harness           
+    1: 5,   # No_Glove            
+    2: 10,   # No_Goggles            
+    3: 12,   # No_Harness           
+    4: 2,    # No_Helmet             
+    5: 8,    # No_Shoe              
+    6: 0,    # Person                   
 }
 
 GLOVES_CLASS_MAPPING = {
-    0: 8,    #  Safety Gloves   
-    1: 10,   # NO-Gloves 
+    0: 5,    #  Safety Gloves   
+    1: 6,   # NO-Gloves 
 }
+
+FOOTWEAR_CLASS_REMAP = {
+    1: 7,    # Safety Boots
+   
+}
+
+
     
 def collect_image_label_pairs(dataset_path: Path) -> list[tuple[Path, Path]]:
     """
@@ -202,7 +206,6 @@ def run_preparation_pipeline() -> None:
     random.seed(RANDOM_SEED)
 
     # Step 1: Collect all pairs from both sources
-# ── Step 1: Collect all pairs from all sources ──
     print("[INFO] Collecting pairs from base dataset...")
     base_pairs = collect_image_label_pairs(BASE_DATASET_PATH)
     print(f"[INFO] Base dataset pairs       : {len(base_pairs)}")
@@ -214,6 +217,10 @@ def run_preparation_pipeline() -> None:
     print("[INFO] Collecting pairs from footwear dataset...")
     footwear_pairs = collect_image_label_pairs(FOOTWEAR_DATASET_PATH)
     print(f"[INFO] Footwear dataset pairs   : {len(footwear_pairs)}")
+
+    print("[INFO] Collecting pairs from ppe dataset...")
+    ppe_pairs = collect_image_label_pairs(PPE_DATASET_PATH)
+    print(f"[INFO] PPE dataset pairs   : {len(ppe_pairs)}")
 
     print("[INFO] Collecting pairs from gloves dataset...")
     gloves_pairs = collect_image_label_pairs(GLOVES_DATASET_PATH)
@@ -238,6 +245,13 @@ def run_preparation_pipeline() -> None:
 
     # Footwear dataset (custom source 2)
     for img_path, label_path in footwear_pairs:
+        remapped = remap_label_file(label_path, SAFETY_PPE_MAPPING)
+        valid    = [ln for ln in remapped if validate_annotation_line(ln)]
+        if valid:
+            all_entries.append((img_path, valid))
+
+    # PPE dataset (custom source 2)
+    for img_path, label_path in ppe_pairs:
         remapped = remap_label_file(label_path, SAFETY_PPE_MAPPING)
         valid    = [ln for ln in remapped if validate_annotation_line(ln)]
         if valid:

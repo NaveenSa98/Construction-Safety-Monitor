@@ -25,34 +25,28 @@
 
 ### Custom Source 1 — Safety Goggles
 
-- **Dataset:** goggles-ppe v2
-- **Provider:** tesis-n7wva via Roboflow Universe
-- **URL:** <https://universe.roboflow.com/tesis-n7wva/goggles-ppe/dataset/2>
+- **Dataset:** goggles-ppe
 - **Total Images:** 179
 - **Classes Used:** Goggles → remapped to Safety Goggles (index 9)
 - **Addresses Rule:** R7 — Protective Eyewear Required
 
 ---
 
-### Custom Source 2 — Safety Footwear
+### Custom Source 2 — Safety_PPE Dataset
 
-- **Dataset:** footwear-hh4hz v1
-- **Provider:** Mohamed Nihal via Roboflow Universe
-- **Total Images:** 7,983
+- **Dataset:** safety-jmser/safety_ppe
+- **Total Images:** 6,629
+- **Split:** Train 5,001 / Valid 1,328 / Test 300
+
 - **Classes Used:**
-  - shoes    → Safety Boots (index 5)
-  - slippers → NO-Safety Boots (index 6)
-  - no_shoes → NO-Safety Boots (index 6)
-- **Mapping Note:** Both slippers and no_shoes are treated as
-  non-compliant footwear per Rule R4.
-- **Addresses Rule:** R4 — Appropriate Safety Footwear Required
+Safety Gloves, Safety Goggles, Hardhat, NO-Safety Gloves, NO-Safety Goggles, NO-Safety Harness, NO-Hardhat,
+NO-Safety Boots, Person, Safety Harness, Safety Boots
 
 ---
 
 ### Custom Source 3 — Safety Gloves
 
-- **Dataset:** safety-gloves-xbnf8 v5
-- **Provider:** Roboflow Universe Projects
+- **Dataset:** safety-gloves-xbnf8
 - **Total Images:** 3,373
 - **Classes Used:**
   - Gloves    → Safety Gloves    (index 8)
