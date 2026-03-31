@@ -20,10 +20,10 @@ TRAINING_CONFIG = {
     "data"         : str(DATASET_YAML),
     "epochs"       : 50,        # Max number training cycles
     "imgsz"        : 640,       # Image resolution
-    "batch"        : 16,        # Image processed at once
-    "patience"     : 15,        # Early stopping — stops if no improvement
+    "batch"        : 32,        
+    "patience"     : 10,        #  faster early stopping
     "pretrained"   : True,
-    "optimizer"    : "AdamW", 
+    "optimizer"    : "AdamW",
     "lr0"          : 0.001,     # Initial learning rate
     "lrf"          : 0.01,      # Final learning rate (fraction of lr0)
     "weight_decay" : 0.0005,    # Prevents overfitting by penalizing large weights
@@ -37,12 +37,14 @@ TRAINING_CONFIG = {
     "degrees"      : 5.0,       # Slight rotation augmentation
     "translate"    : 0.1,       # Translation augmentation
     "scale"        : 0.5,       # Scale augmentation
+    "amp"          : True,      # AMP/FP16 mixed precision — uses T4 Tensor Cores (~40% faster)
+    "cache"        : "disk",    # Cache decoded images to disk — eliminates per-epoch I/O cost
     "project"      : str(PROJECT_DIR),
     "name"         : RUN_NAME,
     "exist_ok"     : True,
     "verbose"      : True,
     "device"       : 0,         # GPU device 0 — Colab T4
-    "workers"      : 2,         # Colab-safe number of dataloader workers
+    "workers"      : 4,         # Increased from 2 — more parallel data loading threads
     "val"          : True,
     "save"         : True,
     "plots"        : True,      # Auto-generate training curve plots

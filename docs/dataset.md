@@ -1,57 +1,52 @@
 # Dataset Documentation
 
-## 1. Base Dataset — Roboflow Public Dataset
+## Dataset
 
-### Source Information
+### Source 1 - Safety dataset
 
 - **Dataset Name**      PPE Detection Computer Vision Dataset
-- **Platform**          Roboflow Universe
-- **URL**               <https://universe.roboflow.com/roboflow-universe-projects/ppe-detection-new-model>
-- **License**           CC BY 4.0
 - **Format**            YOLOv8 (`.txt` annotations + images)  
 - **Total Images**      2801 images
 - **Split**             Train(2605) / Validation(114) / Test(82)
 - **Annotation Format** Bounding box — YOLO `.txt` format
 
----
+**Classes Covered:**
 
-### Classes Covered
-
-`helmet` / `hard-hat`| `vest` / `hi-vis` | `person` / `worker` | `no-helmet` | `no-vest`
+- helmet / hard-hat, vest / hi-vis, person / worker, no-helmet, no-vest
 
 ---
 
-## 2. Custom Dataset
-
-### Custom Source 1 — Safety Goggles
+### Source 2 — Safety Goggles
 
 - **Dataset:** goggles-ppe
 - **Total Images:** 179
-- **Classes Used:** Goggles → remapped to Safety Goggles (index 9)
+- **Classes Covered:** Safety Goggles
 - **Addresses Rule:** R7 — Protective Eyewear Required
+- **Annotation Format** Bounding box — YOLO
 
 ---
 
-### Custom Source 2 — Safety_PPE Dataset
+### Source 3 — Safety_PPE Dataset
 
 - **Dataset:** safety-jmser/safety_ppe
 - **Total Images:** 6,629
 - **Split:** Train 5,001 / Valid 1,328 / Test 300
-
-- **Classes Used:**
+- **Annotation Format** Bounding box — YOLO
+- **Classes Covered:**
 Safety Gloves, Safety Goggles, Hardhat, NO-Safety Gloves, NO-Safety Goggles, NO-Safety Harness, NO-Hardhat,
 NO-Safety Boots, Person, Safety Harness, Safety Boots
 
 ---
 
-### Custom Source 3 — Safety Gloves
+### Source 4 — Safety Gloves
 
 - **Dataset:** safety-gloves-xbnf8
 - **Total Images:** 3,373
-- **Classes Used:**
-  - Gloves    → Safety Gloves    (index 8)
-  - NO-Gloves → NO-Safety Gloves (index 10)
+- **Classes Covered:**
+  - Safety Gloves
+  - NO-Safety Gloves
 - **Addresses Rule:** R6 — Protective Gloves Required
+- **Annotation Format** Bounding box — YOLO
 
 ## Known Data Limitation
 
