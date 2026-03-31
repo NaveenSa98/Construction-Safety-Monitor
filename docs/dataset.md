@@ -9,7 +9,7 @@
 - **URL**               <https://universe.roboflow.com/roboflow-universe-projects/ppe-detection-new-model>
 - **License**           CC BY 4.0
 - **Format**            YOLOv8 (`.txt` annotations + images)  
-- **Total Images**      2801 images ()
+- **Total Images**      2801 images
 - **Split**             Train(2605) / Validation(114) / Test(82)
 - **Annotation Format** Bounding box — YOLO `.txt` format
 

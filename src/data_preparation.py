@@ -26,26 +26,26 @@ RANDOM_SEED = 42
 
 CLASS_NAMES = [
     "Person",
-    "HardHat",
-    "NO-HardHat",
+    "Hardhat",
+    "NO-Hardhat",
     "Safety Vest",
     "NO-Safety Vest",
     "Safety Gloves",
     "NO-Safety Gloves",
     "Safety Boots",
     "NO-Safety Boots",
-    "Saftey Goggles",
-    "NO-Saftey Goggles",
-    "Saftey Harness",
-    "NO-Saftey Harness"
+    "Safety Goggles",
+    "NO-Safety Goggles",
+    "Safety Harness",
+    "NO-Safety Harness"
 ]
 
 # Class remapping for YOLOv8 (0-indexed)
 
 BASE_CLASS_MAPPING = {
     0: 0,  # Person
-    1: 1,  # HardHat
-    2: 2,  # NO-HardHat
+    1: 1,  # Hardhat
+    2: 2,  # NO-Hardhat
     3: 3,  # Safety Vest
     4: 4,  # NO-Safety Vest
 
@@ -53,18 +53,18 @@ BASE_CLASS_MAPPING = {
 
 CUSTOM_CLASS_MAPPING = {
     0: 0,  # Person
-    1:1,   # HardHat
-    2:2,   # NO-HardHat
+    1:1,   # Hardhat
+    2:2,   # NO-Hardhat
     3:3,   # Safety Vest
     4:4,   # NO-Safety Vest
     5:5,   # Safety Gloves
     6:6,   # NO-Safety Gloves
     7:7,   # Safety Boots
     8:8,   # NO-Safety Boots
-    9:9,   # Saftey Goggles
-    10:10, # NO-Saftey Goggles
-    11:11, # Saftey Harness
-    12:12  # NO-Saftey Harness
+    9:9,   # Safety Goggles
+    10:10, # NO-Safety Goggles
+    11:11, # Safety Harness
+    12:12  # NO-Safety Harness
 }
 
     
