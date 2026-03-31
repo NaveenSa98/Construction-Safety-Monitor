@@ -39,7 +39,6 @@ CLASS_NAMES = [
     "NO-Safety Boots",
     "Safety Goggles",
     "NO-Safety Goggles",
-    "Safety Harness",
     "NO-Safety Harness",
 ]
 
@@ -62,7 +61,7 @@ GOGGLES_CLASS_MAPPING = {
 SAFETY_PPE_MAPPING = {
     1: 5,   # No_Glove            
     2: 10,   # No_Goggles            
-    3: 12,   # No_Harness           
+    3: 11,   # No_Harness           
     4: 2,    # No_Helmet             
     5: 8,    # No_Shoe              
     6: 0,    # Person                   
@@ -74,7 +73,7 @@ GLOVES_CLASS_MAPPING = {
 }
 
 FOOTWEAR_CLASS_REMAP = {
-    1: 7,    # Safety Boots
+    0: 7,    # Safety Boots
    
 }
 

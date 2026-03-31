@@ -18,7 +18,7 @@ RUN_NAME = "ppe_detection_v1"
 
 TRAINING_CONFIG = {
     "data"         : str(DATASET_YAML),
-    "epochs"       : 100,       # Max number training cycles
+    "epochs"       : 50,        # Max number training cycles
     "imgsz"        : 640,       # Image resolution
     "batch"        : 16,        # Image processed at once
     "patience"     : 15,        # Early stopping — stops if no improvement
