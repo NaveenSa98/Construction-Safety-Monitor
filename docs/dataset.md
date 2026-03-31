@@ -28,12 +28,8 @@
 - **Scenes Covered:** Outdoor construction sites, indoor warehouses, PPE vialations workers, daylight construction sites, overcast and shadow sites images, construction site with artifial light
 - **Violation Types Represented:** Missing helmet, missing vest, fully compliant, missing gloves, missing footwear, missing goggles, missing harness
 - **Annotation Tool:** Roboflow (web-based annotation)
+- **Split**             Train(105) / Validation(30) / Test(15)
 
----
-
-## Combined Dataset Summary
-
-- **Total Images:** [base + custom]
 - **Class Distribution:**
 
   |----------------|-------|
@@ -47,9 +43,21 @@
   | NO-Goggles     | [X]   |
   | Harness        | [X]   |
   | NO-Harness     | [X]   |
+  | NO-Safety Vest | [X]   |
+  | Boots          | [X]   |
+  | NO-Boot        | [X]   |
 
 ---
 
-**Note** - Custom images collected from publicly available web sources. So limited representation of nighttime or artificial lighting scenarios
+## Combined Dataset Summary
+
+- **Total Images:** [2708 + 150]
+
+---
+
+**Note:**
+
+- Custom images collected from publicly available web sources. So limited representation of nighttime or artificial lighting scenarios
+- Limited visibilty of worn harness of the custom dataset.
 
 ---
