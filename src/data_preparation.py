@@ -43,28 +43,28 @@ CLASS_NAMES = [
 # Class remapping for YOLOv8 (0-indexed)
 
 BASE_CLASS_MAPPING = {
-    0: 0,  # Person
-    1: 1,  # Hardhat
+    5: 0,  # Person
+    0: 1,  # Hardhat
     2: 2,  # NO-Hardhat
-    3: 3,  # Safety Vest
+    7: 3,  # Safety Vest
     4: 4,  # NO-Safety Vest
 
 }
 
 CUSTOM_CLASS_MAPPING = {
-    0: 0,  # Person
-    1:1,   # Hardhat
-    2:2,   # NO-Hardhat
-    3:3,   # Safety Vest
-    4:4,   # NO-Safety Vest
-    5:5,   # Safety Gloves
-    6:6,   # NO-Safety Gloves
-    7:7,   # Safety Boots
-    8:8,   # NO-Safety Boots
-    9:9,   # Safety Goggles
-    10:10, # NO-Safety Goggles
+    7: 0,  # Person
+    0:1,   # Hardhat
+    1:2,   # NO-Hardhat
+    12:3,   # Safety Vest
+    6:4,   # NO-Safety Vest
+    9:5,   # Safety Gloves
+    3:6,   # NO-Safety Gloves
+    8:7,   # Safety Boots
+    2:8,   # NO-Safety Boots
+    10:9,   # Safety Goggles
+    4:10, # NO-Safety Goggles
     11:11, # Safety Harness
-    12:12  # NO-Safety Harness
+    5:12  # NO-Safety Harness
 }
 
     
