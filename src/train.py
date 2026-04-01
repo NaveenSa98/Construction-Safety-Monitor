@@ -10,18 +10,18 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 DATASET_YAML = PROJECT_ROOT / "data" / "processed" / "dataset.yaml"
 
-PRETRAINED_WEIGHTS = "yolov8m.pt" # Start with medium model for better performance on small dataset
+PRETRAINED_WEIGHTS = "yolov8m.pt" # Medium model for better performance on small dataset
 PROJECT_DIR = PROJECT_ROOT / "outputs" / "training_runs"
-RUN_NAME = "ppe_detection_v1"
+RUN_NAME = "ppe_detection_v2" 
 
 # Training configuration
 
 TRAINING_CONFIG = {
     "data"         : str(DATASET_YAML),
-    "epochs"       : 50,        # Max number training cycles
+    "epochs"       : 100,       #  00 epochs ensures full convergence
     "imgsz"        : 640,       # Image resolution
-    "batch"        : 32,        
-    "patience"     : 10,        #  faster early stopping
+    "batch"        : 32,      
+    "patience"     : 20,        # Looser early stopping to avoid cutting off late gains
     "pretrained"   : True,
     "optimizer"    : "AdamW",
     "lr0"          : 0.001,     # Initial learning rate
@@ -29,6 +29,8 @@ TRAINING_CONFIG = {
     "weight_decay" : 0.0005,    # Prevents overfitting by penalizing large weights
     "warmup_epochs": 3,
     "mosaic"       : 1.0,       # Combines multiple images into one
+    "close_mosaic" : 10,        # Disable mosaic in final 10 epochs for clean refinement
+    "copy_paste"   : 0.2,       # Augments underrepresented classes (Goggles, Boots, Gloves)
     "flipud"       : 0.0,       # No vertical flip (unnatural for site images)
     "fliplr"       : 0.5,       # Horizontal flip
     "hsv_h"        : 0.015,     # Hue augmentation
@@ -37,14 +39,14 @@ TRAINING_CONFIG = {
     "degrees"      : 5.0,       # Slight rotation augmentation
     "translate"    : 0.1,       # Translation augmentation
     "scale"        : 0.5,       # Scale augmentation
-    "amp"          : True,      # AMP/FP16 mixed precision — uses T4 Tensor Cores (~40% faster)
+    "amp"          : True,      
     "cache"        : "disk",    # Cache decoded images to disk — eliminates per-epoch I/O cost
     "project"      : str(PROJECT_DIR),
     "name"         : RUN_NAME,
     "exist_ok"     : True,
     "verbose"      : True,
     "device"       : 0,         # GPU device 0 — Colab T4
-    "workers"      : 4,         # Increased from 2 — more parallel data loading threads
+    "workers"      : 4,         # Parallel data loading threads
     "val"          : True,
     "save"         : True,
     "plots"        : True,      # Auto-generate training curve plots

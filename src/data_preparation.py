@@ -1,7 +1,3 @@
-"""Merges the base Roboflow dataset and the custom annotated dataset into a
-single unified training-ready structure for YOLOv8."""
-
-import os
 import shutil
 import random
 import yaml
@@ -10,75 +6,35 @@ from pathlib import Path
 # Configuration
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-BASE_DATASET_PATH = PROJECT_ROOT/ "data"/"raw"/"base_dataset"
-GOGGLES_DATASET_PATH  = PROJECT_ROOT / "data" / "raw" / "goggles_dataset"
-FOOTWEAR_DATASET_PATH = PROJECT_ROOT / "data" / "raw" / "footwear_dataset"
-PPE_DATASET_PATH = PROJECT_ROOT / "data" / "raw" / "ppe_dataset"
-GLOVES_DATASET_PATH   = PROJECT_ROOT / "data" / "raw" / "gloves_dataset"
-
-OUTPUT_PATH = PROJECT_ROOT/ "data"/"processed"
+RAW_DATASET_PATH = PROJECT_ROOT / "data" / "raw"
+OUTPUT_PATH      = PROJECT_ROOT / "data" / "processed"
 
 # Define the split ratios for training, validation, and testing
 TRAIN_SPLIT = 0.70
-VAL_SPLIT = 0.20
-TEST_SPLIT = 0.10
+VAL_SPLIT   = 0.20
+TEST_SPLIT  = 0.10
 
 RANDOM_SEED = 42
 
-# Name class list
-
+# 12-class unified scheme (indices match data/raw/dataset.yaml)
 CLASS_NAMES = [
-    "Person", 
-    "Hardhat",
-    "NO-Hardhat",
-    "Safety Vest",
-    "NO-Safety Vest",
-    "Safety Gloves",
-    "NO-Safety Gloves",
-    "Safety Boots",
-    "NO-Safety Boots",
-    "Safety Goggles",
-    "NO-Safety Goggles",
-    "NO-Safety Harness",
+    "Person",           # 0
+    "Hardhat",          # 1
+    "Safety Vest",      # 2
+    "Safety Boots",     # 3
+    "Safety Gloves",    # 4
+    "Safety Goggles",   # 5
+    "NO-Hardhat",       # 6
+    "NO-Safety Vest",   # 7
+    "NO-Safety Boots",  # 8
+    "NO-Safety Gloves", # 9
+    "NO-Safety Goggles",# 10
+
 ]
 
-# Class remapping for YOLOv8 (0-indexed)
-
-BASE_CLASS_MAPPING = {
-    5:0,  # Person
-    0:1,  # Hardhat
-    2:2,  # NO-Hardhat
-    7:3,  # Safety Vest
-    4:4,  # NO-Safety Vest
-
-}
-
-GOGGLES_CLASS_MAPPING = {
-    0:9,    # Goggles 
-   1:10,    # NO-Goggles 
-}
-
-SAFETY_PPE_MAPPING = {
-    1: 5,   # No_Glove            
-    2: 10,   # No_Goggles            
-    3: 11,   # No_Harness           
-    4: 2,    # No_Helmet             
-    5: 8,    # No_Shoe              
-    6: 0,    # Person                   
-}
-
-GLOVES_CLASS_MAPPING = {
-    0: 5,   # Safety Gloves   
-    1: 6,   # NO-Gloves 
-}
-
-FOOTWEAR_CLASS_MAPPING = {
-    0: 7,    # Safety Boots
-   
-}
+NUM_CLASSES = len(CLASS_NAMES)  # 11
 
 
-    
 def collect_image_label_pairs(dataset_path: Path) -> list[tuple[Path, Path]]:
     """
     Recursively collects all (image, label) path pairs from a dataset folder.
@@ -106,29 +62,18 @@ def collect_image_label_pairs(dataset_path: Path) -> list[tuple[Path, Path]]:
 
     return pairs
 
-# Label remapping function
-def remap_label_file(
-    label_path: Path,
-    class_remap: dict[int, int]
-) -> list[str]:
+def read_label_file(label_path: Path) -> list[str]:
     """
-    Reads a YOLO label file and remaps class indices using the provided mapping.
-    Returns the remapped lines as a list of strings.
-    Skips lines with class indices not present in the remap table.
+    Reads a YOLO label file and returns its non-empty lines.
+    Class indices are already in the unified 12-class scheme (no remapping needed).
     """
-    remapped_lines = []
+    lines = []
     with open(label_path, "r") as f:
         for line in f:
             line = line.strip()
-            if not line:
-                continue
-            parts = line.split()
-            original_class = int(parts[0])
-            if original_class not in class_remap:
-                continue
-            new_class = class_remap[original_class]
-            remapped_lines.append(f"{new_class} {' '.join(parts[1:])}")
-    return remapped_lines
+            if line:
+                lines.append(line)
+    return lines
 
 # Validation function for annotation lines
 def validate_annotation_line(line: str) -> bool:
@@ -204,66 +149,20 @@ def run_preparation_pipeline() -> None:
     print("[INFO] Starting data preparation pipeline...")
     random.seed(RANDOM_SEED)
 
-    # Step 1: Collect all pairs from both sources
-    print("[INFO] Collecting pairs from base dataset...")
-    base_pairs = collect_image_label_pairs(BASE_DATASET_PATH)
-    print(f"[INFO] Base dataset pairs       : {len(base_pairs)}")
+    # Step 1: Collect all pairs from the pre-merged raw dataset
+    print("[INFO] Collecting pairs from raw dataset...")
+    raw_pairs = collect_image_label_pairs(RAW_DATASET_PATH)
+    print(f"[INFO] Raw dataset pairs: {len(raw_pairs)}")
 
-    print("[INFO] Collecting pairs from goggles dataset...")
-    goggles_pairs = collect_image_label_pairs(GOGGLES_DATASET_PATH)
-    print(f"[INFO] Goggles dataset pairs    : {len(goggles_pairs)}")
-
-    print("[INFO] Collecting pairs from footwear dataset...")
-    footwear_pairs = collect_image_label_pairs(FOOTWEAR_DATASET_PATH)
-    print(f"[INFO] Footwear dataset pairs   : {len(footwear_pairs)}")
-
-    print("[INFO] Collecting pairs from ppe dataset...")
-    ppe_pairs = collect_image_label_pairs(PPE_DATASET_PATH)
-    print(f"[INFO] PPE dataset pairs   : {len(ppe_pairs)}")
-
-    print("[INFO] Collecting pairs from gloves dataset...")
-    gloves_pairs = collect_image_label_pairs(GLOVES_DATASET_PATH)
-    print(f"[INFO] Gloves dataset pairs     : {len(gloves_pairs)}")
-
-# Step 2: Remap, validate, and collect all entries 
+    # Step 2: Validate and collect entries (classes already in unified scheme)
     all_entries = []
-
-    # Base dataset
-    for img_path, label_path in base_pairs:
-        remapped = remap_label_file(label_path, BASE_CLASS_MAPPING)
-        valid    = [ln for ln in remapped if validate_annotation_line(ln)]
+    for img_path, label_path in raw_pairs:
+        lines = read_label_file(label_path)
+        valid = [ln for ln in lines if validate_annotation_line(ln)]
         if valid:
             all_entries.append((img_path, valid))
 
-    # Goggles dataset (custom source 1)
-    for img_path, label_path in goggles_pairs:
-        remapped = remap_label_file(label_path, GOGGLES_CLASS_MAPPING)
-        valid    = [ln for ln in remapped if validate_annotation_line(ln)]
-        if valid:
-            all_entries.append((img_path, valid))
-
-    # Footwear dataset (custom source 2)
-    for img_path, label_path in footwear_pairs:
-        remapped = remap_label_file(label_path, FOOTWEAR_CLASS_MAPPING)
-        valid    = [ln for ln in remapped if validate_annotation_line(ln)]
-        if valid:
-            all_entries.append((img_path, valid))
-
-    # PPE dataset (custom source 2)
-    for img_path, label_path in ppe_pairs:
-        remapped = remap_label_file(label_path, SAFETY_PPE_MAPPING)
-        valid    = [ln for ln in remapped if validate_annotation_line(ln)]
-        if valid:
-            all_entries.append((img_path, valid))
-
-    # Gloves dataset (custom source 3)
-    for img_path, label_path in gloves_pairs:
-        remapped = remap_label_file(label_path, GLOVES_CLASS_MAPPING)
-        valid    = [ln for ln in remapped if validate_annotation_line(ln)]
-        if valid:
-            all_entries.append((img_path, valid))
-
-    print(f"[INFO] Total valid entries after remapping: {len(all_entries)}")
+    print(f"[INFO] Total valid entries: {len(all_entries)}")
 
     # Step 3: Shuffle and split
     random.shuffle(all_entries)

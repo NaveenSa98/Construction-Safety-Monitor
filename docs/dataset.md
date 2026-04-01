@@ -1,91 +1,48 @@
 # Dataset Documentation
 
-## Dataset
+## How the Dataset Was Built
 
-### Source 1 - Safety dataset
+The training dataset was created by taking three existing public datasets and extending them with a fourth specialised source to cover all required PPE classes. All four sources use YOLO `.txt` annotation format. Class names were remapped to a shared master list and duplicate images were removed before merging.
 
-- **Dataset Name**      PPE Detection Computer Vision Dataset
-- **Format**            YOLOv8 (`.txt` annotations + images)  
-- **Total Images**      2801 images
-- **Split**             Train(2605) / Validation(114) / Test(82)
-- **Annotation Format** Bounding box — YOLO `.txt` format
-
-**Classes Covered:**
-
-- helmet / hard-hat, vest / hi-vis, person / worker, no-helmet, no-vest
+- **Final size: 4000 images · 12 classes · 70 / 20 / 10 split**
 
 ---
 
-### Source 2 — Safety Goggles
+## Sources
 
-- **Dataset:** goggles-ppe
-- **Total Images:** 179
-- **Classes Covered:** Safety Goggles
-- **Addresses Rule:** R7 — Protective Eyewear Required
-- **Annotation Format** Bounding box — YOLO
+| 1 | PPE Detection | Roboflow — tanish-y7iqo/ppe-detection_data-adcya v3 | 2,801 | Hardhat, Vest, Boots, Gloves, Goggles, Mask |
+| 2 | Construction PPE | Ultralytics — construction-ppe.yaml | 1,416 | Person, Hardhat, Vest, Boots, Gloves, Goggles + NO- variants |
+| 3 | Construction Site Safety | Roboflow — roboflow-universe-projects/construction-site-safety | ~2,000* | Person, Hardhat, NO-Hardhat, Safety Vest, NO-Safety Vest |
+| 4 | Safety PPE | Hugging Face — safety-jmser/safety_ppe | 6,629 | Full PPE set including Safety Harness, Boots, Gloves, Goggles + NO- variants |
 
----
-
-### Source 3 — Safety_PPE Dataset
-
-- **Dataset:** safety-jmser/safety_ppe
-- **Total Images:** 6,629
-- **Split:** Train 5,001 / Valid 1,328 / Test 300
-- **Annotation Format** Bounding box — YOLO
-- **Classes Covered:**
-Safety Gloves, Safety Goggles, Hardhat, NO-Safety Gloves, NO-Safety Goggles, NO-Safety Harness, NO-Hardhat,
-NO-Safety Boots, Person, Safety Harness, Safety Boots
+*PPE-relevant subset only. Source 3 originally contains 25 classes; the 18 non-PPE classes (vehicles, machinery, etc.) were dropped.
 
 ---
 
-### Source 4 — Safety Gloves
+## My Additions
 
-- **Dataset:** safety-gloves-xbnf8
-- **Total Images:** 3,373
-- **Classes Covered:**
-  - Safety Gloves
-  - NO-Safety Gloves
-- **Addresses Rule:** R6 — Protective Gloves Required
-- **Annotation Format** Bounding box — YOLO
+Source 3 (Roboflow Construction Site Safety) was used as the **base dataset**. The following three sources were added to extend coverage across all required PPE classes:
 
-## Known Data Limitation
+- **Source 1** was added to introduce Safety Boots, Safety Gloves, and Safety Goggles annotations, which are absent in the base dataset.
+- **Source 2** was added for its negative classes (NO-Hardhat, NO-Safety Vest, NO-Safety Boots, NO-Safety Gloves, NO-Safety Goggles), which are essential for violation detection.
+- **Source 4** was added as the sole source covering Safety Harness and NO-Safety Harness, and to further strengthen Boot and Glove class representation.
 
-- **Safety Harness (R5):** No suitable public dataset with sufficient
-  harness-specific annotations was identified within the project
-  timeline. Rule R5 is fully defined in the safety rules specification
-  but is marked as **data-limited** in the current model. The compliance
-  logic layer handles this gracefully by marking harness evaluation as
-  NOT EVALUABLE when no harness class detection is available.
-
-- **Class Distribution:**
-
-  |----------------|-------|
-  | Person         | [X]   |
-  | Hardhat        | [X]   |
-  | NO-Hardhat     | [X]   |
-  | Safety Vest    | [X]   |
-  | Gloves         | [X]   |
-  | NO-Gloves      | [X]   |
-  | Goggles        | [X]   |
-  | Harness        | [X]   |
-  | NO-Safety Vest | [X]   |
-  | Boots          | [X]   |
-  | NO-Boot        | [X]   |
+All class names were normalised to a unified 12-class scheme using a custom merging script (`build_dataset.py`). Duplicate images were removed using SHA-256 exact hashing and perceptual hashing (pHash).
 
 ---
 
-## Combined Dataset Summary
+## Class List
 
-- Base Dataset (Construction Site Safety) | 7,000 | Person, Hardhat, NO-Hardhat, Safety Vest, NO-Safety Vest |
-- Goggles Dataset | 179 | Safety Goggles
-- Footwear Dataset | 7,983 | Safety Boots, NO-Safety Boots |
-- Gloves Dataset | 3,373 | Safety Gloves, NO-Safety Gloves |
-- **Total** | **18,000+** | **10 active classes** |
-
----
-
-**Note:**
-
-- Custom images collected from publicly available web sources. So limited representation of nighttime or artificial lighting scenarios
+| 0 | Person                      | 6 | NO-Hardhat |
+| 1 | Hardhat                     | 7 | NO-Safety Vest |
+| 2 | Safety Vest                 | 8 | NO-Safety Boots |
+| 3 | Safety Boots                | 9 | NO-Safety Gloves |
+| 4 | Safety Gloves               | 10 | NO-Safety Goggles |
+| 5 | Safety Goggles
 
 ---
+
+## Known Limitations
+
+- **Lighting coverage** is limited to daylight and indoor construction conditions. Nighttime or low-light performance is not guaranteed.
+- **Class imbalance** exists — core classes (Person, Hardhat, Safety Vest) have significantly more annotations than Goggles and Harness.

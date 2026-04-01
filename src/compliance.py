@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
-import numpy as np
+
 
 
 # Class definitions
@@ -26,7 +26,7 @@ CLASS_NO_SAFETY_HARNESS = 11
 # Constants for rule thresholds
 
 CONFIDENCE_THRESHOLD   = 0.50   # Minimum detection confidence
-IOU_OVERLAP_THRESHOLD  = 0.30   # Minimum overlap for PPE association
+IOU_OVERLAP_THRESHOLD  = 0.30   # Minimum fraction of PPE box that must fall within the body region
 
 # Dividing the person’s bounding box into relative regions that correspond to body parts
 # Used to define expected PPE locations relative to the worker box
@@ -230,10 +230,29 @@ def ppe_overlaps_region(
     threshold  : float = IOU_OVERLAP_THRESHOLD
 ) -> bool:
     """
-    Returns True if a PPE bounding box overlaps a body region
-    sufficiently (IoU >= threshold).
+    Returns True if enough of the PPE bounding box falls within the body region.
+
     """
-    return compute_iou(ppe_box, region_box) >= threshold
+    px1, py1, px2, py2 = ppe_box
+    rx1, ry1, rx2, ry2 = region_box
+
+    inter_x1 = max(px1, rx1)
+    inter_y1 = max(py1, ry1)
+    inter_x2 = min(px2, rx2)
+    inter_y2 = min(py2, ry2)
+
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+
+    if inter_area == 0.0:
+        return False
+
+    ppe_area = max(0.0, px2 - px1) * max(0.0, py2 - py1)
+    if ppe_area == 0.0:
+        return False
+
+    return (inter_area / ppe_area) >= threshold
 
 def get_ppe_centroid_y_fraction(
     ppe_box    : tuple,
