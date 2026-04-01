@@ -68,11 +68,11 @@ SAFETY_PPE_MAPPING = {
 }
 
 GLOVES_CLASS_MAPPING = {
-    0: 5,    #  Safety Gloves   
+    0: 5,   # Safety Gloves   
     1: 6,   # NO-Gloves 
 }
 
-FOOTWEAR_CLASS_REMAP = {
+FOOTWEAR_CLASS_MAPPING = {
     0: 7,    # Safety Boots
    
 }
@@ -244,7 +244,7 @@ def run_preparation_pipeline() -> None:
 
     # Footwear dataset (custom source 2)
     for img_path, label_path in footwear_pairs:
-        remapped = remap_label_file(label_path, SAFETY_PPE_MAPPING)
+        remapped = remap_label_file(label_path, FOOTWEAR_CLASS_MAPPING)
         valid    = [ln for ln in remapped if validate_annotation_line(ln)]
         if valid:
             all_entries.append((img_path, valid))
