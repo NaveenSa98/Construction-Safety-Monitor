@@ -29,7 +29,7 @@ CLASS_NAMES = [
     "NO-Safety Boots",  # 8
     "NO-Safety Gloves", # 9
     "NO-Safety Goggles",# 10
-
+    "Mask",             # 11
 ]
 
 NUM_CLASSES = len(CLASS_NAMES)  # 11
@@ -138,6 +138,7 @@ def generate_dataset_yaml(output_path: Path, class_names: list[str]) -> None:
         "nc"    : len(class_names),
         "names" : class_names,
     }
+    output_path.mkdir(parents=True, exist_ok=True)
     yaml_path = output_path / "dataset.yaml"
     with open(yaml_path, "w") as f:
         yaml.dump(yaml_content, f, default_flow_style=False, sort_keys=False)
