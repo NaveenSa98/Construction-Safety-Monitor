@@ -12,6 +12,34 @@ is determined by which classes are detected on or near a worker.
 
 ---
 
+## Severity Levels & Worker Status
+
+Rules are grouped into two severity tiers. The tier determines the worker-level status
+after all rules are evaluated.
+
+| Worker Status | Meaning | Action |
+| --- | --- | --- |
+| **COMPLIANT** | All evaluable rules passed | No action required |
+| **ALERT** | Critical rules passed; one or more high-severity rules failed | Remind worker to wear missing PPE |
+| **VIOLATION** | One or more critical rules failed | Worker must stop work immediately |
+| **UNVERIFIABLE** | Worker detection below confidence threshold | Treat as potential violation |
+
+**Critical rules (R1, R2, R6):** failure → `VIOLATION`  
+**High-severity rules (R3, R4, R5):** failure → `ALERT` only if critical rules passed
+
+> A supervisor seeing VIOLATION on every worker missing goggles loses trust in the system fast.
+> Separating "stop work" (VIOLATION) from "put this on" (ALERT) makes output actionable and
+> proportionate to actual risk.
+
+**Worker status resolution order (priority):**
+
+1. `UNVERIFIABLE` — worker detection confidence < 0.50
+2. `VIOLATION` — any critical rule (R1, R2, R6) failed
+3. `ALERT` — all critical rules passed; any high-severity rule (R3, R4, R5) failed
+4. `COMPLIANT` — all evaluable rules passed
+
+---
+
 ## Rule R1 — Hard Hat Required
 
 **Requirement:** Every worker on site must wear a hard hat at all times.
