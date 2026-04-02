@@ -10,46 +10,49 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 DATASET_YAML = PROJECT_ROOT / "data" / "processed" / "dataset.yaml"
 
-PRETRAINED_WEIGHTS = "yolov8m.pt" # Medium model for better performance on small dataset
+PRETRAINED_WEIGHTS = "yolov8m.pt" # Medium model 
 PROJECT_DIR = PROJECT_ROOT / "outputs" / "training_runs"
-RUN_NAME = "ppe_detection_v2" 
+RUN_NAME = "ppe_detection_v2"
 
 # Training configuration
 
 TRAINING_CONFIG = {
-    "data"         : str(DATASET_YAML),
-    "epochs"       : 100,       #  00 epochs ensures full convergence
-    "imgsz"        : 640,       # Image resolution
-    "batch"        : 32,      
-    "patience"     : 20,        # Looser early stopping to avoid cutting off late gains
-    "pretrained"   : True,
-    "optimizer"    : "AdamW",
-    "lr0"          : 0.001,     # Initial learning rate
-    "lrf"          : 0.01,      # Final learning rate (fraction of lr0)
-    "weight_decay" : 0.0005,    # Prevents overfitting by penalizing large weights
-    "warmup_epochs": 3,
-    "mosaic"       : 1.0,       # Combines multiple images into one
-    "close_mosaic" : 10,        # Disable mosaic in final 10 epochs for clean refinement
-    "copy_paste"   : 0.2,       # Augments underrepresented classes (Goggles, Boots, Gloves)
-    "flipud"       : 0.0,       # No vertical flip (unnatural for site images)
-    "fliplr"       : 0.5,       # Horizontal flip
-    "hsv_h"        : 0.015,     # Hue augmentation
-    "hsv_s"        : 0.7,       # Saturation augmentation
-    "hsv_v"        : 0.4,       # Value/brightness augmentation
-    "degrees"      : 5.0,       # Slight rotation augmentation
-    "translate"    : 0.1,       # Translation augmentation
-    "scale"        : 0.5,       # Scale augmentation
-    "amp"          : True,      
-    "cache"        : "disk",    # Cache decoded images to disk — eliminates per-epoch I/O cost
-    "project"      : str(PROJECT_DIR),
-    "name"         : RUN_NAME,
-    "exist_ok"     : True,
-    "verbose"      : True,
-    "device"       : 0,         # GPU device 0 — Colab T4
-    "workers"      : 4,         # Parallel data loading threads
-    "val"          : True,
-    "save"         : True,
-    "plots"        : True,      # Auto-generate training curve plots
+    "data"            : str(DATASET_YAML),
+    "epochs"          : 100,
+    "imgsz"           : 640,        
+    "batch"           : -1,         # Auto-select batch
+    "patience"        : 30,         # Allow more room before early stopping fires
+    "pretrained"      : True,
+    "optimizer"       : "AdamW",
+    "lr0"             : 0.001,     
+    "lrf"             : 0.1,        # Final LR = lr0 × lrf → 0.0001; gentler decay than 0.01
+    "cos_lr"          : True,       # Cosine LR schedule — smoother decay, better final mAP
+    "weight_decay"    : 0.0005,
+    "warmup_epochs"   : 3,
+    "momentum"        : 0.937,      # Adam beta1
+    "mosaic"          : 1.0,        # Mosaic augmentation — critical for small-object detection
+    "close_mosaic"    : 10,         # Disable mosaic in final 10 epochs for clean refinement
+    "flipud"          : 0.0,        # No vertical flip — unnatural for site images
+    "fliplr"          : 0.5,        # Horizontal flip
+    "hsv_h"           : 0.015,      # Hue shift — handles varied lighting on site
+    "hsv_s"           : 0.7,        # Saturation shift
+    "hsv_v"           : 0.4,        # Brightness shift — important for indoor/outdoor variation
+    "degrees"         : 5.0,        # Slight rotation — workers lean/tilt slightly
+    "translate"       : 0.1,        # Translation augmentation
+    "scale"           : 0.5,        # Scale variation
+    "amp"             : True,    
+    "cache"           : True,   
+    "save_period"     : 10,        
+    "seed"            : 42,       
+    "project"         : str(PROJECT_DIR),
+    "name"            : RUN_NAME,
+    "exist_ok"        : True,
+    "verbose"         : True,
+    "device"          : 0,         
+    "workers"         : 2,         
+    "val"             : True,
+    "save"            : True,
+    "plots"           : True,       # Auto-generate training curve plots
 }
 
 # Training pipeline

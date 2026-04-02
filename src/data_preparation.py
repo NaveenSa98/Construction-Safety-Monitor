@@ -51,12 +51,9 @@ def collect_image_label_pairs(dataset_path: Path) -> list[tuple[Path, Path]]:
         images_dirs = [dataset_path]
 
     for images_dir in images_dirs:
-        labels_dir = Path(str(images_dir).replace("images", "labels"))
-        if not labels_dir.exists():
-            continue
-        for img_path in images_dir.iterdir():
+        for img_path in images_dir.rglob("*"):
             if img_path.suffix.lower() in image_extensions:
-                label_path = labels_dir / (img_path.stem + ".txt")
+                label_path = Path(str(img_path.parent).replace("images", "labels")) / (img_path.stem + ".txt")
                 if label_path.exists():
                     pairs.append((img_path, label_path))
 
@@ -149,6 +146,11 @@ def run_preparation_pipeline() -> None:
 
     print("[INFO] Starting data preparation pipeline...")
     random.seed(RANDOM_SEED)
+
+    # Ensure output directories always exist
+    for split in ("train", "val", "test"):
+        (OUTPUT_PATH / "images" / split).mkdir(parents=True, exist_ok=True)
+        (OUTPUT_PATH / "labels" / split).mkdir(parents=True, exist_ok=True)
 
     # Step 1: Collect all pairs from the pre-merged raw dataset
     print("[INFO] Collecting pairs from raw dataset...")
