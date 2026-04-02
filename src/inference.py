@@ -34,12 +34,13 @@ from compliance import (
 # Configuration
 
 DEFAULT_WEIGHTS     = Path("models/best.pt")
+PERSON_WEIGHTS      = "yolov8n.pt" 
 OUTPUT_IMAGES_DIR   = Path("outputs/sample_predictions")
 OUTPUT_REPORTS_DIR  = Path("outputs/reports")
 
 # Confidence threshold passed to YOLOv8 at inference time
-YOLO_CONF_THRESHOLD = 0.10   # Lower than compliance threshold to capture
-                               
+YOLO_CONF_THRESHOLD   = 0.10   # Lower than compliance threshold to capture
+PERSON_CONF_THRESHOLD = 0.30   # Threshold for the COCO person detector
 
 # Supported image and video extensions
 IMAGE_EXTENSIONS    = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".avif"}
@@ -104,6 +105,40 @@ def parse_yolo_results(results) -> list[dict]:
             "y2"         : float(box.xyxy[0][3].item()),
         })
     return detections
+
+def get_combined_detections(
+    frame        : "np.ndarray",
+    ppe_model    : "YOLO",
+    person_model : "YOLO",
+) -> list[dict]:
+    """
+    Two-stage detection strategy to work around sparse person annotations
+    in the custom PPE model:
+
+    Stage 1 — Person detection  : COCO-pretrained yolov8n, class 0 = person.
+                                  High recall on construction workers.
+    Stage 2 — PPE detection     : Custom model, classes 1-11 only (PPE items).
+                                  Class 0 from custom model is excluded because
+                                  it was trained on incomplete person labels.
+
+    Returns a merged flat list of detection dicts consumable by evaluate_scene().
+    """
+    # --- Stage 1: persons from COCO pretrained model ---
+    person_results = person_model(frame, conf=PERSON_CONF_THRESHOLD, verbose=False)[0]
+    person_dets = [
+        d for d in parse_yolo_results(person_results)
+        if d["class_id"] == 0   # COCO class 0 = person
+    ]
+
+    # --- Stage 2: PPE items from custom model (exclude class 0) ---
+    ppe_results = ppe_model(frame, conf=YOLO_CONF_THRESHOLD, verbose=False)[0]
+    ppe_dets = [
+        d for d in parse_yolo_results(ppe_results)
+        if d["class_id"] != 0   # skip custom-model person boxes
+    ]
+
+    return person_dets + ppe_dets
+
 
 # Rendering utilities
 
@@ -338,11 +373,12 @@ def save_json_report(report, output_dir: Path) -> Path:
 # Main inference pipeline
 
 def run_on_image(
-    model      : YOLO,
-    image_path : Path,
-    output_dir : Path,
-    report_dir : Path,
-    show       : bool = False,
+    model        : YOLO,
+    image_path   : Path,
+    output_dir   : Path,
+    report_dir   : Path,
+    show         : bool = False,
+    person_model : YOLO = None,
 ) -> dict:
     """
     Runs the full inference + compliance pipeline on a single image.
@@ -353,9 +389,12 @@ def run_on_image(
         print(f"[WARN] Could not read image: {image_path}")
         return {}
 
-    # Run YOLOv8 detection
-    results      = model(frame, conf=YOLO_CONF_THRESHOLD, verbose=False)[0]
-    detections   = parse_yolo_results(results)
+    # Run detection — two-stage if person_model provided, single otherwise
+    if person_model is not None:
+        detections = get_combined_detections(frame, model, person_model)
+    else:
+        results    = model(frame, conf=YOLO_CONF_THRESHOLD, verbose=False)[0]
+        detections = parse_yolo_results(results)
 
     # Run compliance engine
     report       = evaluate_scene(detections, image_name=image_path.name)
@@ -388,11 +427,12 @@ def run_on_image(
 
 
 def run_on_directory(
-    model      : YOLO,
-    source_dir : Path,
-    output_dir : Path,
-    report_dir : Path,
-    show       : bool = False,
+    model        : YOLO,
+    source_dir   : Path,
+    output_dir   : Path,
+    report_dir   : Path,
+    show         : bool = False,
+    person_model : YOLO = None,
 ) -> list[dict]:
     """
     Runs inference on all images in a directory.
@@ -410,7 +450,8 @@ def run_on_directory(
     print(f"[INFO] Processing {len(image_paths)} images from {source_dir}")
     all_reports = []
     for img_path in image_paths:
-        report = run_on_image(model, img_path, output_dir, report_dir, show)
+        report = run_on_image(model, img_path, output_dir, report_dir, show,
+                              person_model=person_model)
         if report:
             all_reports.append(report)
 
@@ -428,11 +469,12 @@ def run_on_directory(
 
 
 def run_on_video(
-    model      : YOLO,
-    video_path : Path,
-    output_dir : Path,
-    report_dir : Path,
-    show       : bool = False,
+    model        : YOLO,
+    video_path   : Path,
+    output_dir   : Path,
+    report_dir   : Path,
+    show         : bool = False,
+    person_model : YOLO = None,
 ) -> None:
     """
     Runs inference on a video file frame by frame.
@@ -465,8 +507,11 @@ def run_on_video(
         if not ret:
             break
 
-        results    = model(frame, conf=YOLO_CONF_THRESHOLD, verbose=False)[0]
-        detections = parse_yolo_results(results)
+        if person_model is not None:
+            detections = get_combined_detections(frame, model, person_model)
+        else:
+            results    = model(frame, conf=YOLO_CONF_THRESHOLD, verbose=False)[0]
+            detections = parse_yolo_results(results)
         report     = evaluate_scene(
             detections,
             image_name=f"{video_path.stem}_frame_{frame_idx:05d}"
@@ -501,7 +546,7 @@ def run_on_video(
 
 
 
-def run_on_webcam(model: YOLO, show: bool = True) -> None:
+def run_on_webcam(model: YOLO, show: bool = True, person_model: YOLO = None) -> None:
     """
     Runs live inference on webcam feed (device 0).
     Press Q to quit.
@@ -518,8 +563,11 @@ def run_on_webcam(model: YOLO, show: bool = True) -> None:
         if not ret:
             break
 
-        results    = model(frame, conf=YOLO_CONF_THRESHOLD, verbose=False)[0]
-        detections = parse_yolo_results(results)
+        if person_model is not None:
+            detections = get_combined_detections(frame, model, person_model)
+        else:
+            results    = model(frame, conf=YOLO_CONF_THRESHOLD, verbose=False)[0]
+            detections = parse_yolo_results(results)
         report     = evaluate_scene(detections, image_name="webcam_frame")
         annotated  = annotate_frame(frame.copy(), detections, report)
 
@@ -578,14 +626,19 @@ def main():
     output_dir  = Path(args.output)
     report_dir  = Path(args.reports)
 
-    # Load model
-    print(f"[INFO] Loading model weights from: {weights}")
+    # Load PPE model
+    print(f"[INFO] Loading PPE model weights from: {weights}")
     model = YOLO(str(weights))
-    print(f"[INFO] Model loaded successfully.")
+    print(f"[INFO] PPE model loaded successfully.")
+
+    # Load COCO-pretrained person detector (auto-downloads yolov8n.pt if absent)
+    print(f"[INFO] Loading COCO person detector: {PERSON_WEIGHTS}")
+    person_model = YOLO(PERSON_WEIGHTS)
+    print(f"[INFO] Person detector loaded. Two-stage detection enabled.")
 
     # Route to appropriate runner
     if source == "0":
-        run_on_webcam(model, show=True)
+        run_on_webcam(model, show=True, person_model=person_model)
 
     else:
         source_path = Path(source)
@@ -596,15 +649,15 @@ def main():
 
         if source_path.is_dir():
             run_on_directory(model, source_path, output_dir,
-                             report_dir, args.show)
+                             report_dir, args.show, person_model=person_model)
 
         elif source_path.suffix.lower() in VIDEO_EXTENSIONS:
             run_on_video(model, source_path, output_dir,
-                         report_dir, args.show)
+                         report_dir, args.show, person_model=person_model)
 
         elif source_path.suffix.lower() in IMAGE_EXTENSIONS:
             run_on_image(model, source_path, output_dir,
-                         report_dir, args.show)
+                         report_dir, args.show, person_model=person_model)
 
         else:
             print(f"[ERROR] Unsupported file type: {source_path.suffix}")

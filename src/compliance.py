@@ -264,6 +264,27 @@ def ppe_overlaps_region(
 
 # PPE association functions
 
+def worker_is_visible(
+    worker_box     : tuple,
+    all_detections : list[Detection],
+) -> bool:
+    """
+    Returns True if at least one confident PPE detection overlaps the
+    worker's bounding box, confirming the worker is clearly visible.
+
+    Used by R1/R2 to distinguish:
+      - visible worker with no helmet/vest  → VIOLATION
+      - occluded / distant worker with no signal → NOT_EVALUABLE
+    """
+    for det in all_detections:
+        if not det.is_confident:
+            continue
+        if ppe_overlaps_region(det.box, worker_box, threshold=0.10):
+            return True
+    return False
+
+
+
 def find_ppe_for_worker(
     worker_box     : tuple,
     all_detections : list[Detection],
@@ -317,7 +338,7 @@ def find_low_confidence_ppe(
 
 def evaluate_r1_helmet(
     worker     : WorkerCompliance,
-    detections : list[Detection]
+    detections : list[Detection],
 ) -> WorkerCompliance:
     """
     R1 — Hard Hat Required (Critical).
@@ -347,6 +368,13 @@ def evaluate_r1_helmet(
 
     if helmet_matches:
         worker.r1_helmet = RuleResult.PASS
+    elif no_helmet_matches:
+        worker.r1_helmet = RuleResult.VIOLATION
+        worker.violations.append(WorkerViolation(
+            rule_id="R1",
+            rule_name="Hard Hat Required",
+            description="Worker detected without a hard hat.",
+        ))
     elif low_conf:
         worker.r1_helmet = RuleResult.LOW_CONF
         worker.violations.append(WorkerViolation(
@@ -355,20 +383,20 @@ def evaluate_r1_helmet(
             description="Helmet detected but below confidence threshold — "
                         "treated as potential violation.",
         ))
-    elif no_helmet_matches:
-        worker.r1_helmet = RuleResult.VIOLATION
-        worker.violations.append(WorkerViolation(
-            rule_id="R1",
-            rule_name="Hard Hat Required",
-            description="Worker detected without a hard hat.",
-        ))
     else:
-        worker.r1_helmet = RuleResult.VIOLATION
-        worker.violations.append(WorkerViolation(
-            rule_id="R1",
-            rule_name="Hard Hat Required",
-            description="No helmet detected in head region of worker.",
-        ))
+        # No direct helmet signal. Use other PPE detections as a visibility
+        # proxy: if any PPE item overlaps this worker's box, the worker is
+        # clearly in frame — missing helmet is a confirmed VIOLATION.
+        # If nothing is detectable (far/occluded), mark NOT_EVALUABLE.
+        if worker_is_visible(worker.box, detections):
+            worker.r1_helmet = RuleResult.VIOLATION
+            worker.violations.append(WorkerViolation(
+                rule_id="R1",
+                rule_name="Hard Hat Required",
+                description="Worker visible (other PPE detected) but no helmet found.",
+            ))
+        else:
+            worker.r1_helmet = RuleResult.NOT_EVALUABLE
 
     return worker
 
@@ -405,6 +433,13 @@ def evaluate_r2_vest(
 
     if vest_matches:
         worker.r2_vest = RuleResult.PASS
+    elif no_vest_matches:
+        worker.r2_vest = RuleResult.VIOLATION
+        worker.violations.append(WorkerViolation(
+            rule_id="R2",
+            rule_name="Hi-Vis Vest Required",
+            description="Worker detected without a high-visibility vest.",
+        ))
     elif low_conf:
         worker.r2_vest = RuleResult.LOW_CONF
         worker.violations.append(WorkerViolation(
@@ -413,20 +448,20 @@ def evaluate_r2_vest(
             description="Vest detected but below confidence threshold — "
                         "treated as potential violation.",
         ))
-    elif no_vest_matches:
-        worker.r2_vest = RuleResult.VIOLATION
-        worker.violations.append(WorkerViolation(
-            rule_id="R2",
-            rule_name="Hi-Vis Vest Required",
-            description="Worker detected without a high-visibility vest.",
-        ))
     else:
-        worker.r2_vest = RuleResult.VIOLATION
-        worker.violations.append(WorkerViolation(
-            rule_id="R2",
-            rule_name="Hi-Vis Vest Required",
-            description="No vest detected in torso region of worker.",
-        ))
+        # No direct vest signal. Use other PPE detections as a visibility
+        # proxy: if any PPE item overlaps this worker's box, the worker is
+        # clearly in frame — missing vest is a confirmed VIOLATION.
+        # If nothing is detectable (far/occluded), mark NOT_EVALUABLE.
+        if worker_is_visible(worker.box, detections):
+            worker.r2_vest = RuleResult.VIOLATION
+            worker.violations.append(WorkerViolation(
+                rule_id="R2",
+                rule_name="Hi-Vis Vest Required",
+                description="Worker visible (other PPE detected) but no vest found.",
+            ))
+        else:
+            worker.r2_vest = RuleResult.NOT_EVALUABLE
 
     return worker
 
@@ -610,6 +645,10 @@ def evaluate_r6_full_ppe(worker: WorkerCompliance) -> WorkerCompliance:
     if (worker.r1_helmet == RuleResult.PASS and
             worker.r2_vest == RuleResult.PASS):
         worker.r6_full_ppe = RuleResult.PASS
+    elif (worker.r1_helmet == RuleResult.NOT_EVALUABLE or
+              worker.r2_vest == RuleResult.NOT_EVALUABLE):
+        # Can't confirm full PPE when either component is unevaluable.
+        worker.r6_full_ppe = RuleResult.NOT_EVALUABLE
     else:
         worker.r6_full_ppe = RuleResult.VIOLATION
 

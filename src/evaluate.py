@@ -353,9 +353,16 @@ def identify_failure_cases(
             "report"     : report,
         })
 
+    # Only consider images where at least one person was detected.
+    # Images with zero workers are non-construction or extreme angle shots —
+    # they are not meaningful failure cases for the compliance engine.
+    worker_detected = [s for s in scored_images if s["n_workers"] > 0]
+
     # Sort by ascending mean confidence — hardest images first
-    scored_images.sort(key=lambda x: x["mean_conf"])
-    failure_cases = scored_images[:n_cases]
+    worker_detected.sort(key=lambda x: x["mean_conf"])
+
+    # Fall back to all images if no worker detections found at all
+    failure_cases = (worker_detected if worker_detected else scored_images)[:n_cases]
 
     # Save annotated failure case images
     failure_dir = output_dir / "failure_cases"
