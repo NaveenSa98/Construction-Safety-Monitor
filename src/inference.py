@@ -27,7 +27,7 @@ from compliance import (
     evaluate_scene,
     SceneVerdict,
     WorkerStatus,
-    RuleResult,
+  
 )
 
 
@@ -38,7 +38,7 @@ OUTPUT_IMAGES_DIR   = Path("outputs/sample_predictions")
 OUTPUT_REPORTS_DIR  = Path("outputs/reports")
 
 # Confidence threshold passed to YOLOv8 at inference time
-YOLO_CONF_THRESHOLD = 0.25    # Lower than compliance threshold to capture
+YOLO_CONF_THRESHOLD = 0.10   # Lower than compliance threshold to capture
                                
 
 # Supported image and video extensions
@@ -47,29 +47,31 @@ VIDEO_EXTENSIONS    = {".mp4", ".avi", ".mov", ".mkv"}
 
  # Color palette for rendering worker boxes based on compliance status
 
-COLOUR_COMPLIANT     = (34,  197,  94)   # Green
-COLOUR_VIOLATION     = (239,  68,  68)   # Red
-COLOUR_UNVERIFIABLE  = (249, 115,  22)   # Orange
-COLOUR_PPE_BOX       = (148, 163, 184)   # Slate grey — PPE item boxes
-COLOUR_SAFE_BG       = (34,  197,  94)   # Green — scene verdict background
-COLOUR_UNSAFE_BG     = (239,  68,  68)   # Red
-COLOUR_UNVERIF_BG    = (249, 115,  22)   # Orange
+COLOUR_COMPLIANT     = (94,  197,  34)   # Green  — all rules passed
+COLOUR_ALERT         = (8,   179, 234)   # Yellow — critical OK, high-severity alerts
+COLOUR_VIOLATION     = (68,   68, 239)   # Red    — critical rule failed
+COLOUR_UNVERIFIABLE  = (22,  115, 249)   # Orange — low confidence
+COLOUR_PPE_BOX       = (184, 163, 148)   # Slate grey — PPE item boxes
+COLOUR_SAFE_BG       = (94,  197,  34)   # Green
+COLOUR_ALERT_BG      = (8,   179, 234)   # Yellow
+COLOUR_UNSAFE_BG     = (68,   68, 239)   # Red
+COLOUR_UNVERIF_BG    = (22,  115, 249)   # Orange
 COLOUR_TEXT          = (255, 255, 255)   # White text
-COLOUR_TEXT_DARK     = (15,   23,  42)   # Dark text for light backgrounds
+COLOUR_TEXT_DARK     = (42,   23,  15)   # Dark text for light backgrounds
 
 CLASS_NAMES = {
-    0 : "Person",
-    1 : "Hardhat",
-    2 : "NO-Hardhat",
-    3 : "Safety Vest",
-    4 : "NO-Safety Vest",
-    5 : "Safety Gloves",
-    6 : "NO-Safety Gloves",
-    7 : "Safety Boots",
-    8 : "NO-Safety Boots",
-    9 : "Safety Goggles",
+    0  : "Person",
+    1  : "Hardhat",
+    2  : "Safety Vest",
+    3  : "Safety Boots",
+    4  : "Safety Gloves",
+    5  : "Safety Goggles",
+    6  : "NO-Hardhat",
+    7  : "NO-Safety Vest",
+    8  : "NO-Safety Boots",
+    9  : "NO-Safety Gloves",
     10 : "NO-Safety Goggles",
-    11 : "NO-Safety Harness",
+    11 : "Mask",
 }
 
 # Detection parsing
@@ -181,7 +183,10 @@ def render_worker_annotations(
         # Select colour based on worker status
         if worker.status == WorkerStatus.COMPLIANT:
             colour = COLOUR_COMPLIANT
-            status_text = "COMPLIANT"
+            status_text = "OK"
+        elif worker.status == WorkerStatus.ALERT:
+            colour = COLOUR_ALERT
+            status_text = "ALERT"
         elif worker.status == WorkerStatus.VIOLATION:
             colour = COLOUR_VIOLATION
             status_text = "VIOLATION"
@@ -199,12 +204,16 @@ def render_worker_annotations(
         draw_label_pill(frame, label, (x1, label_y - 22),
                         bg_colour=colour, font_scale=0.50)
 
-        # Draw individual violation tags below the worker box
+        # Draw individual violation/alert tags below the worker box
         tag_y = y2 + 6
         for violation in worker.violations:
             tag_text = f"! {violation.rule_id}: {violation.rule_name}"
+            tag_colour = (
+                COLOUR_ALERT if worker.status == WorkerStatus.ALERT
+                else COLOUR_VIOLATION
+            )
             draw_label_pill(frame, tag_text, (x1, tag_y),
-                            bg_colour=COLOUR_VIOLATION,
+                            bg_colour=tag_colour,
                             font_scale=0.42)
             tag_y += 22
 
@@ -253,6 +262,9 @@ def render_scene_verdict_banner(
     if report.scene_verdict == SceneVerdict.SAFE:
         bg_colour   = COLOUR_SAFE_BG
         verdict_str = "SCENE: SAFE"
+    elif report.scene_verdict == SceneVerdict.ALERT:
+        bg_colour   = COLOUR_ALERT_BG
+        verdict_str = "SCENE: ALERT"
     elif report.scene_verdict == SceneVerdict.UNSAFE:
         bg_colour   = COLOUR_UNSAFE_BG
         verdict_str = "SCENE: UNSAFE"
@@ -275,6 +287,7 @@ def render_scene_verdict_banner(
     summary = (
         f"Workers: {report.total_workers}  "
         f"OK: {report.compliant_count}  "
+        f"Alerts: {report.alert_count}  "
         f"Violations: {report.violation_count}  "
         f"Unverifiable: {report.unverifiable_count}"
     )
@@ -362,6 +375,7 @@ def run_on_image(
     print(
         f"[{report.scene_verdict.value:12s}] {image_path.name} | "
         f"Workers: {report.total_workers} | "
+        f"Alerts: {report.alert_count} | "
         f"Violations: {report.violation_count} | "
         f"Saved → {out_path.name}"
     )

@@ -3,24 +3,22 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 
-
-# Class definitions
+# Class definitions — must match data/raw/dataset.yaml (the authoritative class ordering)
 
 CLASS_PERSON            = 0
 CLASS_HARDHAT           = 1
-CLASS_NO_HARDHAT        = 2
-CLASS_SAFETY_VEST       = 3
-CLASS_NO_SAFETY_VEST    = 4
-CLASS_SAFETY_GLOVES     = 5
-CLASS_NO_SAFETY_GLOVES  = 6
-CLASS_SAFETY_BOOTS      = 7
+CLASS_SAFETY_VEST       = 2
+CLASS_SAFETY_BOOTS      = 3
+CLASS_SAFETY_GLOVES     = 4
+CLASS_SAFETY_GOGGLES    = 5
+CLASS_NO_HARDHAT        = 6
+CLASS_NO_SAFETY_VEST    = 7
 CLASS_NO_SAFETY_BOOTS   = 8
-CLASS_SAFETY_GOGGLES    = 9
+CLASS_NO_SAFETY_GLOVES  = 9
 CLASS_NO_SAFETY_GOGGLES = 10
-CLASS_NO_SAFETY_HARNESS = 11
+CLASS_MASK              = 11
 
 
 # Constants for rule thresholds
@@ -28,7 +26,7 @@ CLASS_NO_SAFETY_HARNESS = 11
 CONFIDENCE_THRESHOLD   = 0.50   # Minimum detection confidence
 IOU_OVERLAP_THRESHOLD  = 0.30   # Minimum fraction of PPE box that must fall within the body region
 
-# Dividing the person’s bounding box into relative regions that correspond to body parts
+# Dividing the person's bounding box into relative regions that correspond to body parts
 # Used to define expected PPE locations relative to the worker box
 
 HEAD_REGION_UPPER      = 0.00   # Top of worker box
@@ -38,17 +36,20 @@ TORSO_REGION_LOWER     = 0.65   # Bottom of torso region
 FOOT_REGION_UPPER      = 0.80   # Top of foot region (bottom 20% of body)
 FOOT_REGION_LOWER      = 1.00   # Bottom of worker box
 HAND_REGION_UPPER      = 0.30   # Hands can appear across mid-body
-HAND_REGION_LOWER      = 0.85   
+HAND_REGION_LOWER      = 0.85
+
 
 class WorkerStatus(Enum):
-    COMPLIANT     = "COMPLIANT"
-    VIOLATION     = "VIOLATION"
-    UNVERIFIABLE  = "UNVERIFIABLE"
+    COMPLIANT    = "COMPLIANT"     # All evaluable rules passed
+    ALERT        = "ALERT"         # Critical rules passed; high-severity rules failed
+    VIOLATION    = "VIOLATION"     # One or more critical rules failed
+    UNVERIFIABLE = "UNVERIFIABLE"  # Worker detection below confidence threshold
 
 class SceneVerdict(Enum):
-    SAFE          = "SAFE"
-    UNSAFE        = "UNSAFE"
-    UNVERIFIABLE  = "UNVERIFIABLE"
+    SAFE         = "SAFE"          # All workers compliant
+    ALERT        = "ALERT"         # No critical violations; some high-severity alerts
+    UNSAFE       = "UNSAFE"        # At least one worker with a critical violation
+    UNVERIFIABLE = "UNVERIFIABLE"  # No violations/alerts but uncertain detections
 
 class RuleResult(Enum):
     PASS          = "PASS"
@@ -89,7 +90,7 @@ class Detection:
     @property
     def is_confident(self) -> bool:
         return self.confidence >= CONFIDENCE_THRESHOLD
-    
+
 
 @dataclass
 class WorkerViolation:
@@ -102,23 +103,29 @@ class WorkerViolation:
 class WorkerCompliance:
     """
     Full compliance assessment for a single detected worker.
+
+    Rules per safety_rules.md:
+        R1 — Hard Hat Required          (Critical)
+        R2 — Hi-Vis Vest Required       (Critical)
+        R3 — Safety Boots Required      (High)
+        R4 — Protective Gloves Required (High)
+        R5 — Safety Goggles Required    (High)
+        R6 — Full Basic PPE Compliance  (Critical, derived: R1 + R2)
     """
-    worker_id      : int
-    box            : tuple[float, float, float, float]
-    confidence     : float
-    status         : WorkerStatus
+    worker_id    : int
+    box          : tuple[float, float, float, float]
+    confidence   : float
+    status       : WorkerStatus
 
     # Per-rule results
-    r1_helmet      : RuleResult = RuleResult.NOT_EVALUABLE
-    r2_vest        : RuleResult = RuleResult.NOT_EVALUABLE
-    r3_full_ppe    : RuleResult = RuleResult.NOT_EVALUABLE
-    r4_boots       : RuleResult = RuleResult.NOT_EVALUABLE
-    r5_harness     : RuleResult = RuleResult.NOT_EVALUABLE
-    r6_gloves      : RuleResult = RuleResult.NOT_EVALUABLE
-    r7_goggles     : RuleResult = RuleResult.NOT_EVALUABLE
-    r8_correct_ppe : RuleResult = RuleResult.NOT_EVALUABLE
+    r1_helmet    : RuleResult = RuleResult.NOT_EVALUABLE
+    r2_vest      : RuleResult = RuleResult.NOT_EVALUABLE
+    r3_boots     : RuleResult = RuleResult.NOT_EVALUABLE
+    r4_gloves    : RuleResult = RuleResult.NOT_EVALUABLE
+    r5_goggles   : RuleResult = RuleResult.NOT_EVALUABLE
+    r6_full_ppe  : RuleResult = RuleResult.NOT_EVALUABLE
 
-    violations     : list[WorkerViolation] = field(default_factory=list)
+    violations   : list[WorkerViolation] = field(default_factory=list)
 
 
 @dataclass
@@ -127,13 +134,14 @@ class SceneReport:
     Complete compliance report for a single image / frame.
     This is the final output of the compliance engine.
     """
-    image_name      : str
-    scene_verdict   : SceneVerdict
-    total_workers   : int
-    compliant_count : int
-    violation_count : int
+    image_name        : str
+    scene_verdict     : SceneVerdict
+    total_workers     : int
+    compliant_count   : int
+    alert_count       : int
+    violation_count   : int
     unverifiable_count: int
-    workers         : list[WorkerCompliance] = field(default_factory=list)
+    workers           : list[WorkerCompliance] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Serialises the report to a JSON-compatible dictionary."""
@@ -142,6 +150,7 @@ class SceneReport:
             "scene_verdict"      : self.scene_verdict.value,
             "total_workers"      : self.total_workers,
             "compliant_count"    : self.compliant_count,
+            "alert_count"        : self.alert_count,
             "violation_count"    : self.violation_count,
             "unverifiable_count" : self.unverifiable_count,
             "workers": [
@@ -151,14 +160,12 @@ class SceneReport:
                     "confidence" : round(w.confidence, 3),
                     "status"     : w.status.value,
                     "rules": {
-                        "R1_helmet"      : w.r1_helmet.value,
-                        "R2_vest"        : w.r2_vest.value,
-                        "R3_full_ppe"    : w.r3_full_ppe.value,
-                        "R4_boots"       : w.r4_boots.value,
-                        "R5_harness"     : w.r5_harness.value,
-                        "R6_gloves"      : w.r6_gloves.value,
-                        "R7_goggles"     : w.r7_goggles.value,
-                        "R8_correct_ppe" : w.r8_correct_ppe.value,
+                        "R1_helmet"   : w.r1_helmet.value,
+                        "R2_vest"     : w.r2_vest.value,
+                        "R3_boots"    : w.r3_boots.value,
+                        "R4_gloves"   : w.r4_gloves.value,
+                        "R5_goggles"  : w.r5_goggles.value,
+                        "R6_full_ppe" : w.r6_full_ppe.value,
                     },
                     "violations": [
                         {
@@ -172,6 +179,7 @@ class SceneReport:
                 for w in self.workers
             ],
         }
+
 
 # Utility functions
 
@@ -211,8 +219,8 @@ def get_anatomical_region(
     lower_frac : float
 ) -> tuple[float, float, float, float]:
     """
-    Returns a sub-region of the worker bounding box corresponding to
-   body part defined by vertical fractions of the box height.
+    Returns a sub-region of the worker bounding box corresponding to a
+    body part defined by vertical fractions of the box height.
 
     upper_frac = 0.0 is the top of the worker box.
     lower_frac = 1.0 is the bottom of the worker box.
@@ -231,7 +239,6 @@ def ppe_overlaps_region(
 ) -> bool:
     """
     Returns True if enough of the PPE bounding box falls within the body region.
-
     """
     px1, py1, px2, py2 = ppe_box
     rx1, ry1, rx2, ry2 = region_box
@@ -254,25 +261,8 @@ def ppe_overlaps_region(
 
     return (inter_area / ppe_area) >= threshold
 
-def get_ppe_centroid_y_fraction(
-    ppe_box    : tuple,
-    worker_box : tuple
-) -> Optional[float]:
-    """
-    Returns the vertical position of the PPE box centroid as a
-    fraction of the worker box height (0.0 = top, 1.0 = bottom).
-    Returns None if the PPE centroid is outside the worker box.
-    """
-    _, wy1, _, wy2 = worker_box
-    _, py1, _, py2 = ppe_box
-    worker_height = wy2 - wy1
-    if worker_height == 0:
-        return None
-    ppe_centroid_y = (py1 + py2) / 2.0
-    fraction = (ppe_centroid_y - wy1) / worker_height
-    return fraction
 
-# PPE association function
+# PPE association functions
 
 def find_ppe_for_worker(
     worker_box     : tuple,
@@ -299,7 +289,6 @@ def find_ppe_for_worker(
     return matches
 
 
-
 def find_low_confidence_ppe(
     worker_box     : tuple,
     all_detections : list[Detection],
@@ -324,7 +313,6 @@ def find_low_confidence_ppe(
     return matches
 
 
-
 # Rule evaluation
 
 def evaluate_r1_helmet(
@@ -332,10 +320,13 @@ def evaluate_r1_helmet(
     detections : list[Detection]
 ) -> WorkerCompliance:
     """
-    R1 — Hard Hat / Safety Helmet Required.
+    R1 — Hard Hat Required (Critical).
     Checks the head region (top 25% of worker box).
+    PASS          : Hardhat detected in head region.
+    VIOLATION     : NO-Hardhat detected, or no helmet associated with worker.
+    LOW_CONF      : Hardhat detected but below confidence threshold.
     """
-    head_matches = find_ppe_for_worker(
+    helmet_matches = find_ppe_for_worker(
         worker.box, detections,
         target_classes=[CLASS_HARDHAT],
         region_upper=HEAD_REGION_UPPER,
@@ -354,7 +345,7 @@ def evaluate_r1_helmet(
         region_lower=HEAD_REGION_LOWER,
     )
 
-    if head_matches:
+    if helmet_matches:
         worker.r1_helmet = RuleResult.PASS
     elif low_conf:
         worker.r1_helmet = RuleResult.LOW_CONF
@@ -372,7 +363,6 @@ def evaluate_r1_helmet(
             description="Worker detected without a hard hat.",
         ))
     else:
-        # No positive or negative signal — treat conservatively
         worker.r1_helmet = RuleResult.VIOLATION
         worker.violations.append(WorkerViolation(
             rule_id="R1",
@@ -388,8 +378,11 @@ def evaluate_r2_vest(
     detections : list[Detection]
 ) -> WorkerCompliance:
     """
-    R2 — High-Visibility Vest Required.
+    R2 — High-Visibility Vest Required (Critical).
     Checks the torso region (15%–65% of worker box height).
+    PASS          : Safety Vest detected in torso region.
+    VIOLATION     : NO-Safety Vest detected, or no vest associated with worker.
+    LOW_CONF      : Safety Vest detected but below confidence threshold.
     """
     vest_matches = find_ppe_for_worker(
         worker.box, detections,
@@ -438,37 +431,22 @@ def evaluate_r2_vest(
     return worker
 
 
-def evaluate_r3_full_ppe(worker: WorkerCompliance) -> WorkerCompliance:
-    """
-    R3 — Full PPE Compliance.
-    Derived rule: passes only if both R1 (helmet) and R2 (vest) pass.
-    No new detections needed — uses results already computed.
-    """
-    if (worker.r1_helmet == RuleResult.PASS and
-            worker.r2_vest == RuleResult.PASS):
-        worker.r3_full_ppe = RuleResult.PASS
-    else:
-        worker.r3_full_ppe = RuleResult.VIOLATION
-
-    return worker
-
-
-def evaluate_r4_boots(
+def evaluate_r3_boots(
     worker     : WorkerCompliance,
     detections : list[Detection]
 ) -> WorkerCompliance:
     """
-    R4 — Appropriate Safety Footwear Required.
-    Only evaluated when foot region is visible (bottom 20% of worker box).
-    Worker box must be tall enough to resolve foot-level detail.
+    R3 — Safety Boots Required (High).
+    Only evaluated when the foot region is visible. Worker box must be
+    at least 150px tall to resolve foot-level detail.
+    PASS          : Safety Boots detected in foot region.
+    VIOLATION     : NO-Safety Boots detected in foot region.
+    LOW_CONF      : NO-Safety Boots detected but below confidence threshold.
+    NOT_EVALUABLE : Foot region not visible or worker box too small.
     """
     _, y1, _, y2 = worker.box
-    worker_height = y2 - y1
-
-    # Only evaluate if worker box is tall enough to see feet
-    # Threshold: worker box must be at least 150px tall
-    if worker_height < 150:
-        worker.r4_boots = RuleResult.NOT_EVALUABLE
+    if (y2 - y1) < 150:
+        worker.r3_boots = RuleResult.NOT_EVALUABLE
         return worker
 
     boots_matches = find_ppe_for_worker(
@@ -491,79 +469,40 @@ def evaluate_r4_boots(
     )
 
     if boots_matches:
-        worker.r4_boots = RuleResult.PASS
+        worker.r3_boots = RuleResult.PASS
     elif no_boots_matches:
-        worker.r4_boots = RuleResult.VIOLATION
+        worker.r3_boots = RuleResult.VIOLATION
         worker.violations.append(WorkerViolation(
-            rule_id="R4",
-            rule_name="Safety Footwear Required",
+            rule_id="R3",
+            rule_name="Safety Boots Required",
             description="Non-compliant footwear detected — "
-                        "trainers, slippers, or bare feet.",
+                        "trainers, sandals, or bare feet.",
         ))
     elif low_conf:
-        worker.r4_boots = RuleResult.LOW_CONF
+        worker.r3_boots = RuleResult.LOW_CONF
         worker.violations.append(WorkerViolation(
-            rule_id="R4",
-            rule_name="Safety Footwear Required",
+            rule_id="R3",
+            rule_name="Safety Boots Required",
             description="Non-compliant footwear detected but below confidence threshold — "
                         "treated as potential violation.",
         ))
     else:
-        worker.r4_boots = RuleResult.NOT_EVALUABLE
+        worker.r3_boots = RuleResult.NOT_EVALUABLE
 
     return worker
 
 
-def evaluate_r5_harness(
+def evaluate_r4_gloves(
     worker     : WorkerCompliance,
     detections : list[Detection]
 ) -> WorkerCompliance:
     """
-    R5 — Safety Harness Required at Height.
-    A confirmed NO_SAFETY_HARNESS detection triggers a violation.
-    Absence of any detection → NOT_EVALUABLE (cannot confirm harness presence).
-    """
-    no_harness_matches = find_ppe_for_worker(
-        worker.box, detections,
-        target_classes=[CLASS_NO_SAFETY_HARNESS],
-        region_upper=TORSO_REGION_UPPER,
-        region_lower=TORSO_REGION_LOWER,
-    )
-    low_conf = find_low_confidence_ppe(
-        worker.box, detections,
-        target_classes=[CLASS_NO_SAFETY_HARNESS],
-        region_upper=TORSO_REGION_UPPER,
-        region_lower=TORSO_REGION_LOWER,
-    )
-
-    if no_harness_matches:
-        worker.r5_harness = RuleResult.VIOLATION
-        worker.violations.append(WorkerViolation(
-            rule_id="R5",
-            rule_name="Safety Harness Required",
-            description="Worker detected without a safety harness.",
-        ))
-    elif low_conf:
-        worker.r5_harness = RuleResult.LOW_CONF
-        worker.violations.append(WorkerViolation(
-            rule_id="R5",
-            rule_name="Safety Harness Required",
-            description="No-harness indicator detected but below confidence threshold — "
-                        "treated as potential violation.",
-        ))
-    else:
-        # No negative signal detected — cannot confirm presence or absence
-        worker.r5_harness = RuleResult.NOT_EVALUABLE
-
-    return worker
-
-def evaluate_r6_gloves(
-    worker     : WorkerCompliance,
-    detections : list[Detection]
-) -> WorkerCompliance:
-    """
-    R6 — Protective Gloves Required for Manual Handling.
-    Only evaluated when hand region is visible.
+    R4 — Protective Gloves Required (High).
+    Only evaluated when the hand region is visible.
+    PASS          : Safety Gloves detected in hand region.
+    VIOLATION     : NO-Safety Gloves detected in hand region.
+    LOW_CONF      : NO-Safety Gloves detected but below confidence threshold.
+    NOT_EVALUABLE : Hands not visible in the frame.
     """
     gloves_matches = find_ppe_for_worker(
         worker.box, detections,
@@ -585,39 +524,39 @@ def evaluate_r6_gloves(
     )
 
     if gloves_matches:
-        worker.r6_gloves = RuleResult.PASS
+        worker.r4_gloves = RuleResult.PASS
     elif no_gloves_matches:
-        worker.r6_gloves = RuleResult.VIOLATION
+        worker.r4_gloves = RuleResult.VIOLATION
         worker.violations.append(WorkerViolation(
-            rule_id="R6",
+            rule_id="R4",
             rule_name="Protective Gloves Required",
             description="Worker hands visible without protective gloves.",
         ))
     elif low_conf:
-        worker.r6_gloves = RuleResult.LOW_CONF
+        worker.r4_gloves = RuleResult.LOW_CONF
         worker.violations.append(WorkerViolation(
-            rule_id="R6",
+            rule_id="R4",
             rule_name="Protective Gloves Required",
             description="Bare hands detected but below confidence threshold — "
                         "treated as potential violation.",
         ))
     else:
-        worker.r6_gloves = RuleResult.NOT_EVALUABLE
+        worker.r4_gloves = RuleResult.NOT_EVALUABLE
 
     return worker
 
 
-def evaluate_r7_goggles(
+def evaluate_r5_goggles(
     worker     : WorkerCompliance,
     detections : list[Detection]
 ) -> WorkerCompliance:
     """
-    R7 — Protective Eyewear Required.
-    Checks the head region for goggles presence or confirmed absence.
-    - PASS          : CLASS_SAFETY_GOGGLES detected in head region
-    - VIOLATION     : CLASS_NO_SAFETY_GOGGLES detected (confirmed bare eyes)
-    - LOW_CONF      : No-goggles detection present but below confidence threshold
-    - NOT_EVALUABLE : No signal at all — face not visible or too distant
+    R5 — Safety Goggles Required (High).
+    Checks the head/face region for goggles presence or confirmed absence.
+    PASS          : Safety Goggles detected in head region.
+    VIOLATION     : NO-Safety Goggles detected (confirmed bare eyes).
+    LOW_CONF      : NO-Safety Goggles detected but below confidence threshold.
+    NOT_EVALUABLE : No signal — face not visible or too distant.
     """
     goggles_matches = find_ppe_for_worker(
         worker.box, detections,
@@ -639,75 +578,40 @@ def evaluate_r7_goggles(
     )
 
     if goggles_matches:
-        worker.r7_goggles = RuleResult.PASS
-    elif low_conf:
-        worker.r7_goggles = RuleResult.LOW_CONF
+        worker.r5_goggles = RuleResult.PASS
+    elif no_goggles_matches:
+        worker.r5_goggles = RuleResult.VIOLATION
         worker.violations.append(WorkerViolation(
-            rule_id="R7",
-            rule_name="Protective Eyewear Required",
+            rule_id="R5",
+            rule_name="Safety Goggles Required",
+            description="Worker detected without safety goggles or protective eyewear.",
+        ))
+    elif low_conf:
+        worker.r5_goggles = RuleResult.LOW_CONF
+        worker.violations.append(WorkerViolation(
+            rule_id="R5",
+            rule_name="Safety Goggles Required",
             description="No-goggles indicator detected but below confidence threshold — "
                         "treated as potential violation.",
         ))
-    elif no_goggles_matches:
-        worker.r7_goggles = RuleResult.VIOLATION
-        worker.violations.append(WorkerViolation(
-            rule_id="R7",
-            rule_name="Protective Eyewear Required",
-            description="Worker detected without safety goggles or protective eyewear.",
-        ))
     else:
-        # No signal in either direction — face not visible or too distant
-        worker.r7_goggles = RuleResult.NOT_EVALUABLE
+        worker.r5_goggles = RuleResult.NOT_EVALUABLE
 
     return worker
 
 
-def evaluate_r8_correct_usage(
-    worker     : WorkerCompliance,
-    detections : list[Detection]
-) -> WorkerCompliance:
+def evaluate_r6_full_ppe(worker: WorkerCompliance) -> WorkerCompliance:
     """
-    R8 — Correct and Proper PPE Usage.
-    Checks whether detected PPE items are positioned in anatomically
-    correct regions. A helmet centroid outside the head region or a
-    vest centroid outside the torso region is flagged.
+    R6 — Full Basic PPE Compliance (Critical, derived rule).
+    Passes only if both R1 (helmet) and R2 (vest) pass.
+    This is the baseline check applied to every detected worker on site.
+    No new detections needed — uses results already computed.
     """
-    anomalies_found = False
-
-    for det in detections:
-        if not det.is_confident:
-            continue
-
-        # Check helmet positioning
-        if det.class_id == CLASS_HARDHAT:
-            fraction = get_ppe_centroid_y_fraction(det.box, worker.box)
-            if fraction is not None:
-                if fraction > HEAD_REGION_LOWER:
-                    anomalies_found = True
-                    worker.violations.append(WorkerViolation(
-                        rule_id="R8",
-                        rule_name="Correct PPE Usage",
-                        description=f"Helmet centroid at {fraction:.0%} of worker "
-                                    f"height — positioned below expected head region.",
-                    ))
-
-        # Check vest positioning
-        if det.class_id == CLASS_SAFETY_VEST:
-            fraction = get_ppe_centroid_y_fraction(det.box, worker.box)
-            if fraction is not None:
-                if fraction < TORSO_REGION_UPPER or fraction > TORSO_REGION_LOWER:
-                    anomalies_found = True
-                    worker.violations.append(WorkerViolation(
-                        rule_id="R8",
-                        rule_name="Correct PPE Usage",
-                        description=f"Vest centroid at {fraction:.0%} of worker "
-                                    f"height — positioned outside expected torso region.",
-                    ))
-
-    if anomalies_found:
-        worker.r8_correct_ppe = RuleResult.VIOLATION
+    if (worker.r1_helmet == RuleResult.PASS and
+            worker.r2_vest == RuleResult.PASS):
+        worker.r6_full_ppe = RuleResult.PASS
     else:
-        worker.r8_correct_ppe = RuleResult.PASS
+        worker.r6_full_ppe = RuleResult.VIOLATION
 
     return worker
 
@@ -719,32 +623,42 @@ def resolve_worker_status(worker: WorkerCompliance) -> WorkerCompliance:
     Determines the final WorkerStatus from the accumulated rule results.
 
     Priority:
-        1. UNVERIFIABLE — if worker confidence is below threshold
-        2. VIOLATION    — if any rule returned VIOLATION or LOW_CONF
-        3. COMPLIANT    — all evaluated rules passed
+        1. UNVERIFIABLE — worker detection below confidence threshold
+        2. VIOLATION    — any critical rule (R1, R2, R6) failed
+        3. ALERT        — critical rules passed; high-severity rule (R3, R4, R5) failed
+        4. COMPLIANT    — all evaluable rules passed
+
+    Critical rules (R1, R2, R6): worker must stop work if failed.
+    High-severity rules (R3, R4, R5): worker is on site but needs a reminder.
     """
     if worker.confidence < CONFIDENCE_THRESHOLD:
         worker.status = WorkerStatus.UNVERIFIABLE
         return worker
 
-    all_results = [
+    critical_results = [
         worker.r1_helmet,
         worker.r2_vest,
-        worker.r3_full_ppe,
-        worker.r4_boots,
-        worker.r5_harness,
-        worker.r6_gloves,
-        worker.r7_goggles,
-        worker.r8_correct_ppe,
+        worker.r6_full_ppe,
+    ]
+    high_results = [
+        worker.r3_boots,
+        worker.r4_gloves,
+        worker.r5_goggles,
     ]
 
-    has_violation = any(
+    critical_failed = any(
         r in (RuleResult.VIOLATION, RuleResult.LOW_CONF)
-        for r in all_results
+        for r in critical_results
+    )
+    high_failed = any(
+        r in (RuleResult.VIOLATION, RuleResult.LOW_CONF)
+        for r in high_results
     )
 
-    if has_violation:
+    if critical_failed:
         worker.status = WorkerStatus.VIOLATION
+    elif high_failed:
+        worker.status = WorkerStatus.ALERT
     else:
         worker.status = WorkerStatus.COMPLIANT
 
@@ -755,9 +669,10 @@ def resolve_scene_verdict(workers: list[WorkerCompliance]) -> SceneVerdict:
     """
     Derives the scene-level verdict from all worker statuses.
 
-    SAFE         — all workers COMPLIANT
-    UNSAFE       — at least one worker in VIOLATION
-    UNVERIFIABLE — no violations but at least one worker UNVERIFIABLE
+    UNSAFE       — at least one worker has a critical violation
+    ALERT        — no critical violations; at least one worker has a high-severity alert
+    UNVERIFIABLE — no violations/alerts but at least one worker is unverifiable
+    SAFE         — all workers compliant
     """
     if not workers:
         return SceneVerdict.UNVERIFIABLE
@@ -766,6 +681,8 @@ def resolve_scene_verdict(workers: list[WorkerCompliance]) -> SceneVerdict:
 
     if any(s == WorkerStatus.VIOLATION for s in statuses):
         return SceneVerdict.UNSAFE
+    if any(s == WorkerStatus.ALERT for s in statuses):
+        return SceneVerdict.ALERT
     if any(s == WorkerStatus.UNVERIFIABLE for s in statuses):
         return SceneVerdict.UNVERIFIABLE
     return SceneVerdict.SAFE
@@ -815,9 +732,11 @@ def evaluate_scene(
     ]
 
     # ── Separate person detections from PPE detections ──
+    # Include ALL person detections (not just confident ones) so that
+    # low-confidence workers are counted as UNVERIFIABLE rather than silently dropped.
     person_detections = [
         d for d in detections
-        if d.class_id == CLASS_PERSON and d.is_confident
+        if d.class_id == CLASS_PERSON
     ]
     ppe_detections = [
         d for d in detections
@@ -835,15 +754,17 @@ def evaluate_scene(
             status     = WorkerStatus.UNVERIFIABLE,
         )
 
-        # Apply all rules in sequence
-        worker = evaluate_r1_helmet(worker, ppe_detections)
-        worker = evaluate_r2_vest(worker, ppe_detections)
-        worker = evaluate_r3_full_ppe(worker)
-        worker = evaluate_r4_boots(worker, ppe_detections)
-        worker = evaluate_r5_harness(worker, ppe_detections)
-        worker = evaluate_r6_gloves(worker, ppe_detections)
-        worker = evaluate_r7_goggles(worker, ppe_detections)
-        worker = evaluate_r8_correct_usage(worker, ppe_detections)
+        # Only run rule evaluation for confident detections.
+        # Low-confidence workers skip directly to resolve_worker_status
+        # which marks them UNVERIFIABLE.
+        if person.is_confident:
+            worker = evaluate_r1_helmet(worker, ppe_detections)
+            worker = evaluate_r2_vest(worker, ppe_detections)
+            worker = evaluate_r3_boots(worker, ppe_detections)
+            worker = evaluate_r4_gloves(worker, ppe_detections)
+            worker = evaluate_r5_goggles(worker, ppe_detections)
+            worker = evaluate_r6_full_ppe(worker)
+
         worker = resolve_worker_status(worker)
 
         worker_results.append(worker)
@@ -852,18 +773,21 @@ def evaluate_scene(
     scene_verdict = resolve_scene_verdict(worker_results)
 
     # ── Assemble and return scene report ──
-    compliant_count     = sum(1 for w in worker_results
-                              if w.status == WorkerStatus.COMPLIANT)
-    violation_count     = sum(1 for w in worker_results
-                              if w.status == WorkerStatus.VIOLATION)
-    unverifiable_count  = sum(1 for w in worker_results
-                              if w.status == WorkerStatus.UNVERIFIABLE)
+    compliant_count    = sum(1 for w in worker_results
+                             if w.status == WorkerStatus.COMPLIANT)
+    alert_count        = sum(1 for w in worker_results
+                             if w.status == WorkerStatus.ALERT)
+    violation_count    = sum(1 for w in worker_results
+                             if w.status == WorkerStatus.VIOLATION)
+    unverifiable_count = sum(1 for w in worker_results
+                             if w.status == WorkerStatus.UNVERIFIABLE)
 
     return SceneReport(
         image_name         = image_name,
         scene_verdict      = scene_verdict,
         total_workers      = len(worker_results),
         compliant_count    = compliant_count,
+        alert_count        = alert_count,
         violation_count    = violation_count,
         unverifiable_count = unverifiable_count,
         workers            = worker_results,
