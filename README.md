@@ -3,9 +3,14 @@
 A real-time computer vision system that detects construction workers and verifies whether each worker is wearing the required Personal Protective Equipment (PPE). The system provides per-worker compliance status and a scene-level verdict of **SAFE**, **ALERT**, or **UNSAFE** — accessible via a CLI tool, a REST API, and a React web dashboard.
 
 ![Frontend Dashboard](docs/screenshots/frontend_dashboard.png)
-![Image analysis](docs/screenshots/frontend_dashboard_1.png)
-![Video analysis](docs/screenshots/frontend_dashboard_2.png)
-![Alert notification](docs/screenshots/frontend_dashboard_3.png)
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/frontend_dashboard_1.png" width="100%" /><br/><b>Image Analysis</b></td>
+    <td align="center"><img src="docs/screenshots/frontend_dashboard_2.png" width="100%" /><br/><b>Video Analysis</b></td>
+    <td align="center"><img src="docs/screenshots/frontend_dashboard_3.png" width="100%" /><br/><b>Alert Notification</b></td>
+  </tr>
+</table>
 
 ---
 
@@ -233,9 +238,3 @@ To retrain:
 | No tracking | Each frame is evaluated independently — no temporal smoothing |
 | Single angle | Performance may vary with different camera angles or lighting |
 
----
-
-## License
-
-This project is for educational and research purposes.  
-Dataset is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
