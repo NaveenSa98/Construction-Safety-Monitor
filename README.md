@@ -1,191 +1,241 @@
 # Construction Site PPE Compliance Monitoring System
 
-A computer vision system that detects construction workers in images or video and determines whether each worker is wearing the required Personal Protective Equipment (PPE). The system returns a per-worker compliance status and a scene-level verdict of **SAFE**, **ALERT**, or **UNSAFE**.
+A real-time computer vision system that detects construction workers and verifies whether each worker is wearing the required Personal Protective Equipment (PPE). The system provides per-worker compliance status and a scene-level verdict of **SAFE**, **ALERT**, or **UNSAFE** — accessible via a CLI tool, a REST API, and a React web dashboard.
+
+![Frontend Dashboard](docs/screenshots/frontend_dashboard.png)
+![Image analysis](docs/screenshots/frontend_dashboard_1.png)
+![Video analysis](docs/screenshots/frontend_dashboard_2.png)
+![Alert notification](docs/screenshots/frontend_dashboard_3.png)
+
+---
+
+## Features
+
+- **YOLOv8s Object Detection** — Detects workers and 5 PPE classes (helmet, vest, boots, gloves, goggles)
+- **Rule-Based Compliance Engine** — Decoupled from detection; checks critical vs. advisory PPE per worker
+- **Three Input Modes** — Image upload, video file processing, and live webcam/RTSP streaming
+- **FastAPI Backend** — REST endpoints for image/video analysis + WebSocket for real-time streaming
+- **React Dashboard** — Dark-themed, glassmorphism UI with real-time analytics, alert notifications, and video playback controls
+- **CLI Inference** — Run detection directly from the command line on images, videos, or webcam
+
+---
+
+## Demo Outputs
+
+### Detection Samples (Validation Set)
+
+![Detection Samples](docs/screenshots/detection_samples.jpg)
+
+### Training Curves
+
+![Training Results](docs/screenshots/training_results.png)
+
+### Confusion Matrix
+
+![Confusion Matrix](docs/screenshots/confusion_matrix.png)
 
 ---
 
 ## Project Structure
 
-```text
+```
 Construction-Safety-Monitor/
-├── data/
-│   └── raw/                  # Roboflow-exported dataset (YOLOv8 format)
-│       ├── train/
-│       ├── valid/
-│       ├── test/
-│       └── data.yaml
-├── models/
-│   └── best.pt               # Trained weights (copied from Colab)
-├── notebooks/
-│   └── training.ipynb        # Colab training notebook
-├── outputs/                  # Evaluation reports, annotated results
 ├── src/
-│   ├── data_preparation.py   # Dataset validation
-│   ├── train.py              # Model training (Colab)
-│   ├── compliance.py         # PPE rule logic
-│   ├── inference.py          # End-to-end inference pipeline
-│   └── evaluate.py           # Formal model evaluation
-└── docs/
-    ├── safety_rules.md       # Rule definitions (R1–R5, R7)
-    └── dataset.md            # Dataset provenance and class distribution
+│   ├── api.py                # FastAPI backend (REST + WebSocket)
+│   ├── inference.py          # CLI inference pipeline (image/video/webcam)
+│   ├── compliance.py         # PPE compliance rule engine
+│   ├── evaluate.py           # Model evaluation script
+│   ├── train.py              # Training script (Colab)
+│   └── data_preparation.py   # Dataset validation
+├── frontend-ppe/             # React + Vite frontend
+│   ├── src/
+│   │   ├── App.jsx           # Main dashboard component
+│   │   ├── index.css         # Global styles
+│   │   └── App.css           # Component styles
+│   └── package.json
+├── models/
+│   └── best.pt               # Trained YOLOv8s weights
+├── notebooks/
+│   └── training.ipynb        # Google Colab training notebook
+├── data/
+│   └── raw/                  # Roboflow dataset (YOLOv8 format)
+├── outputs/
+│   ├── evaluation_report.json
+│   └── runs/                 # Training artifacts (curves, confusion matrix)
+├── docs/
+│   ├── safety_rules.md
+│   └── dataset.md
+└── requirements.txt
 ```
 
 ---
 
-## Quick Start — Local Inference
+## Tech Stack
 
-### 1. Install dependencies
+| Component | Technology |
+|-----------|-----------|
+| Detection Model | YOLOv8s (Ultralytics) |
+| Backend | FastAPI, OpenCV, Python |
+| Frontend | React 19, Vite, Tailwind CSS, Lucide Icons |
+| Training | Google Colab (T4 GPU) |
+| Dataset | Roboflow (500 images, 7 classes, YOLOv8 format) |
 
-```bash
-pip install ultralytics opencv-python pyyaml
-```
+---
 
-### 2. Download trained weights
+## Getting Started
 
-Copy `best.pt` from your Google Drive into the `models/` folder:
+### Prerequisites
 
-```text
-models/best.pt
-```
+- Python 3.9+
+- Node.js 18+
+- Trained model weights (`models/best.pt`)
 
-### 3. Run on a single image
-
-```bash
-python src/inference.py --weights models/best.pt --source data/raw/test/images/your_image.jpg
-```
-
-### 4. Save annotated result
+### 1. Clone the Repository
 
 ```bash
-python src/inference.py --weights models/best.pt --source data/raw/test/images/your_image.jpg --output outputs/result.jpg
+git clone https://github.com/NaveenSa98/Construction-Safety-Monitor.git
+cd Construction-Safety-Monitor
 ```
 
-### 5. Run on a video file
+### 2. Install Backend Dependencies
 
 ```bash
+pip install -r requirements.txt
+```
+
+### 3. Start the Backend API
+
+```bash
+uvicorn src.api:app --reload --host 0.0.0.0 --port 8000
+```
+
+The API will be available at `http://localhost:8000`.
+
+### 4. Start the Frontend
+
+```bash
+cd frontend-ppe
+npm install
+npm run dev
+```
+
+The dashboard will open at `http://localhost:5173`.
+
+---
+
+## Usage
+
+### Web Dashboard
+
+1. Open the dashboard and select a mode: **IMAGE**, **VIDEO**, or **STREAM**
+2. Upload an image or video, or connect to a live webcam/RTSP feed
+3. View real-time compliance results — per-worker PPE status and scene verdict
+4. Receive toast alerts with audio beep when UNSAFE violations are detected
+
+### CLI Inference
+
+```bash
+# Single image
+python src/inference.py --weights models/best.pt --source path/to/image.jpg
+
+# Save annotated output
+python src/inference.py --weights models/best.pt --source path/to/image.jpg --output outputs/result.jpg
+
+# Video file
 python src/inference.py --weights models/best.pt --source path/to/video.mp4 --output outputs/result.mp4
-```
 
-### 6. Live webcam
-
-```bash
+# Live webcam
 python src/inference.py --weights models/best.pt --source 0
 ```
 
 ---
 
-## Training in Google Colab
+## API Endpoints
 
-### 1. Upload project to Google Drive
-
-Upload the entire project folder to:
-
-```text
-MyDrive/Construction-Safety-Monitor/
-```
-
-### 2. Open the notebook in VS Code
-
-Open `notebooks/training.ipynb` and connect to a Colab runtime with **T4 GPU**.
-
-### 3. Run all cells
-
-The notebook will:
-
-1. Verify GPU
-2. Mount Google Drive
-3. Install dependencies
-4. Download dataset from Roboflow
-5. Fix known label issues
-6. Validate dataset
-7. Train for 25 epochs
-8. Display training curves
-
-Trained weights are saved automatically to:
-
-```text
-runs/train/ppe_yolov8s/weights/best.pt
-```
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/analyze` | Upload an image → returns annotated image + compliance report |
+| `POST` | `/analyze_video` | Upload a video → returns frame-by-frame annotated results |
+| `WS` | `/ws/stream` | WebSocket for real-time webcam/RTSP streaming |
 
 ---
 
-## Validate Dataset
+## Compliance Logic
 
-```bash
-python src/data_preparation.py --data data/raw/data.yaml
-```
-
----
-
-## Evaluate Model
-
-```bash
-python src/evaluate.py --weights models/best.pt --data data/raw/data.yaml
-```
-
-Results are saved to `outputs/evaluation_report.json`.
-
----
-
-## Scene Verdict Logic
+### Scene Verdict
 
 | Verdict | Condition |
-| --- | --- |
-| **SAFE** | Every worker has helmet + vest + boots + gloves + goggles |
-| **ALERT** | Every worker has helmet + vest + boots, but gloves or goggles missing |
-| **UNSAFE** | Any worker is missing helmet, vest, or boots |
+|---------|-----------|
+| **SAFE** | Every worker has helmet + vest (critical PPE) |
+| **UNSAFE** | Any worker is missing helmet or vest |
+
+### PPE Classification
+
+| Tier | Items | Impact |
+|------|-------|--------|
+| **Critical** | Helmet, Vest | Missing → worker non-compliant → UNSAFE |
+| **Advisory** | Boots, Gloves, Goggles | Missing → per-worker warning only |
+
+### Association Algorithm
+
+- Each PPE item is assigned to the worker with the highest IoU score
+- Worker bounding boxes are expanded by 50% to catch edge PPE (e.g., helmet above bent worker)
+- Vertical zone heuristics prevent impossible associations (e.g., helmet at feet)
+- Person NMS deduplicates overlapping worker detections
 
 ---
 
-## Architecture & Design Decisions
+## Model Performance
 
-### Model — YOLOv8s
+| Metric | Score |
+|--------|-------|
+| **mAP@50** | 0.750 |
+| **mAP@50-95** | 0.457 |
+| **Precision** | 0.752 |
+| **Recall** | 0.658 |
 
-YOLOv8s (small) was chosen over larger variants because:
+### Per-Class Results
 
-- The dataset is only 500 images — larger models would overfit
-- Colab free tier (T4) handles YOLOv8s at batch=16 comfortably
-- Inference speed is suitable for real-time video
+| Class | Precision | Recall | mAP@50 |
+|-------|-----------|--------|--------|
+| Person | 0.919 | 0.877 | 0.944 |
+| Helmet | 0.886 | 0.978 | 0.964 |
+| Boot | 0.816 | 0.810 | 0.913 |
+| Goggles | 0.977 | 0.813 | 0.842 |
+| Gloves | 0.847 | 0.479 | 0.724 |
+| Vest | 0.815 | 0.652 | 0.804 |
 
-### compliance.py is decoupled from inference.py
+---
 
-Detection (what objects are in the frame) and compliance (are the rules satisfied) are kept in separate modules. This means the compliance logic can be tested independently and the detection model can be swapped without changing any rule logic.
+## Training
 
-### IoU-based PPE association with expanded bbox
+Training was done on Google Colab with a T4 GPU using the notebook at `notebooks/training.ipynb`.
 
-Each PPE item is assigned to the worker whose bounding box has the highest IoU with the PPE box. The worker bbox is expanded by 15% before IoU computation to handle PPE detected at the edges (e.g. helmet above a bent-forward worker).
+- **Model:** YOLOv8s (small variant — prevents overfitting on 500-image dataset)
+- **Epochs:** 25
+- **Batch Size:** 16
+- **Dataset:** [Construction PPE (Roboflow)](https://universe.roboflow.com/zukoos-workspace/construction-ppe-fwz4e/dataset/1) — 500 images, 7 classes
 
-### Vertical zone heuristics
+To retrain:
 
-Each PPE type is only accepted within a plausible vertical region of the worker's bbox (e.g. helmets in the top 60%, boots in the bottom 40%). This prevents a helmet from a nearby worker being credited to the wrong person.
-
-### Two-tier PPE classification
-
-- **Critical PPE** (helmet, vest, boots) — missing any → UNSAFE
-- **Advisory PPE** (gloves, goggles) — missing → ALERT only
-
-This reflects real construction site practice where helmets, vests and boots are mandatory at all times, while gloves and goggles depend on the task.
+1. Upload project to Google Drive
+2. Open `notebooks/training.ipynb` in Colab with T4 GPU
+3. Run all cells — weights saved to `runs/train/ppe_yolov8s/weights/best.pt`
 
 ---
 
 ## Known Limitations
 
 | Limitation | Detail |
-| --- | --- |
-| Small dataset | 500 images is limited. Rare classes (goggles, gloves) have less training data and lower mAP |
-| Occlusion | Heavily occluded PPE (e.g. gloves behind the body) will not be detected |
-| Bent/crouching workers | Person bbox may not fully contain the head — bbox expansion partially mitigates this |
-| No tracking | Each frame is evaluated independently — no temporal smoothing across video frames |
-| Single camera angle | Model trained on a specific dataset — performance may vary with different camera angles or lighting |
+|------------|--------|
+| Small dataset | 500 images — rare classes (gloves, goggles) have lower recall |
+| Occlusion | Heavily occluded PPE (e.g., gloves behind body) may not be detected |
+| No tracking | Each frame is evaluated independently — no temporal smoothing |
+| Single angle | Performance may vary with different camera angles or lighting |
 
 ---
 
-## Per-Class Evaluation Results
+## License
 
-Run `evaluate.py` to generate up-to-date results. Expected weak classes based on dataset size:
-
-- **goggles** — underrepresented in training data
-- **gloves** — small, frequently occluded
-- **boots** — lower body often partially out of frame
-
-See `outputs/evaluation_report.json` for full results after evaluation.
+This project is for educational and research purposes.  
+Dataset is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
