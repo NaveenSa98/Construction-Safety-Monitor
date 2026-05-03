@@ -1,205 +1,284 @@
-import shutil
-import random
-import yaml
+"""
+data_preparation.py
+-------------------
+Validates the Roboflow-exported YOLOv8 dataset. Checks directory structure,
+label integrity, image/label parity, and class distribution. Read-only — does
+not modify any files.
+
+Usage:
+    python src/data_preparation.py --data data/raw/data.yaml
+    python src/data_preparation.py --data data/raw/data.yaml --report outputs/data_report.json
+"""
+
+import argparse
+import json
+import sys
+from collections import Counter
 from pathlib import Path
 
-# Configuration
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-RAW_DATASET_PATH = PROJECT_ROOT / "data" / "raw"
-OUTPUT_PATH      = PROJECT_ROOT / "data" / "processed"
-
-# Define the split ratios for training, validation, and testing
-TRAIN_SPLIT = 0.70
-VAL_SPLIT   = 0.20
-TEST_SPLIT  = 0.10
-
-RANDOM_SEED = 42
-
-# 12-class unified scheme (indices match data/raw/dataset.yaml)
-CLASS_NAMES = [
-    "Person",           # 0
-    "Hardhat",          # 1
-    "Safety Vest",      # 2
-    "Safety Boots",     # 3
-    "Safety Gloves",    # 4
-    "Safety Goggles",   # 5
-    "NO-Hardhat",       # 6
-    "NO-Safety Vest",   # 7
-    "NO-Safety Boots",  # 8
-    "NO-Safety Gloves", # 9
-    "NO-Safety Goggles",# 10
-    "Mask",             # 11
-]
-
-NUM_CLASSES = len(CLASS_NAMES)  # 11
+import yaml
 
 
-def collect_image_label_pairs(dataset_path: Path) -> list[tuple[Path, Path]]:
-    """
-    Recursively collects all (image, label) path pairs from a dataset folder.
-    Supports both flat and split (train/val/test) folder structures.
-    Returns a list of (image_path, label_path) tuples.
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    """
-    image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".avif"}
-    pairs = []
-
-    images_dirs = list(dataset_path.rglob("images"))
-    if not images_dirs:
-        # Flat structure — images at root
-        images_dirs = [dataset_path]
-
-    for images_dir in images_dirs:
-        for img_path in images_dir.rglob("*"):
-            if img_path.suffix.lower() in image_extensions:
-                label_path = Path(str(img_path.parent).replace("images", "labels")) / (img_path.stem + ".txt")
-                if label_path.exists():
-                    pairs.append((img_path, label_path))
-
-    return pairs
-
-def read_label_file(label_path: Path) -> list[str]:
-    """
-    Reads a YOLO label file and returns its non-empty lines.
-    Class indices are already in the unified 12-class scheme (no remapping needed).
-    """
-    lines = []
-    with open(label_path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                lines.append(line)
-    return lines
-
-# Validation function for annotation lines
-def validate_annotation_line(line: str) -> bool:
-    """
-    Validates a single YOLO annotation line.
-    Checks:
-        - Correct number of fields (5: class x y w h)
-        - Bounding box values are within [0.0, 1.0]
-        - Width and height are greater than zero
-    Returns True if valid, False otherwise.
-    """
-    parts = line.strip().split()
-    if len(parts) != 5:
-        return False
-    try:
-        _, x_center, y_center, width, height = map(float, parts)
-    except ValueError:
-        return False
-    if not (0.0 <= x_center <= 1.0 and 0.0 <= y_center <= 1.0):
-        return False
-    if not (0.0 < width <= 1.0 and 0.0 < height <= 1.0):
-        return False 
-    return True
-
-# Function to copy image and write remapped label
-def copy_pair_to_split(
-    img_path: Path,
-    label_lines: list[str],
-    split: str,
-    output_path: Path,
-    index: int
-) -> None:
-    """
-    Copies an image and writes its remapped label to the correct split folder.
-    Renames files using a zero-padded index to avoid name collisions.
-    """
-    img_dest_dir   = output_path / "images" / split
-    label_dest_dir = output_path / "labels" / split
-
-    img_dest_dir.mkdir(parents=True, exist_ok=True)
-    label_dest_dir.mkdir(parents=True, exist_ok=True)
-
-    new_stem = f"img_{index:06d}"
-    img_dest   = img_dest_dir   / (new_stem + img_path.suffix.lower())
-    label_dest = label_dest_dir / (new_stem + ".txt")
-
-    shutil.copy2(img_path, img_dest)
-
-    with open(label_dest, "w") as f:
-        f.write("\n".join(label_lines))
+def load_yaml(path: Path) -> dict:
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
 
 
-def generate_dataset_yaml(output_path: Path, class_names: list[str]) -> None:
-    """
-    Generates the dataset.yaml configuration file required by YOLOv8.
-    """
-    yaml_content = {
-        "path"  : str(output_path.resolve()),
-        "train" : "images/train",
-        "val"   : "images/val",
-        "test"  : "images/test",
-        "nc"    : len(class_names),
-        "names" : class_names,
-    }
-    output_path.mkdir(parents=True, exist_ok=True)
-    yaml_path = output_path / "dataset.yaml"
-    with open(yaml_path, "w") as f:
-        yaml.dump(yaml_content, f, default_flow_style=False, sort_keys=False)
-    print(f"[INFO] dataset.yaml written to: {yaml_path}")
+def split_dirs(data_yaml_path: Path, split_image_path: str) -> tuple[Path, Path]:
+    """Resolve images/ and labels/ dirs relative to the data.yaml location."""
+    base = data_yaml_path.parent  # e.g. data/raw/
+    images_dir = (base / split_image_path).resolve()
+    labels_dir = Path(str(images_dir).replace("images", "labels"))
+    return images_dir, labels_dir
 
-#Main Pipeline
-def run_preparation_pipeline() -> None:
 
-    print("[INFO] Starting data preparation pipeline...")
-    random.seed(RANDOM_SEED)
+def collect_files(directory: Path, extensions: tuple) -> list[Path]:
+    if not directory.exists():
+        return []
+    return sorted(f for f in directory.iterdir() if f.suffix.lower() in extensions)
 
-    # Ensure output directories always exist
-    for split in ("train", "val", "test"):
-        (OUTPUT_PATH / "images" / split).mkdir(parents=True, exist_ok=True)
-        (OUTPUT_PATH / "labels" / split).mkdir(parents=True, exist_ok=True)
 
-    # Step 1: Collect all pairs from the pre-merged raw dataset
-    print("[INFO] Collecting pairs from raw dataset...")
-    raw_pairs = collect_image_label_pairs(RAW_DATASET_PATH)
-    print(f"[INFO] Raw dataset pairs: {len(raw_pairs)}")
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
-    # Step 2: Validate and collect entries (classes already in unified scheme)
-    all_entries = []
-    for img_path, label_path in raw_pairs:
-        lines = read_label_file(label_path)
-        valid = [ln for ln in lines if validate_annotation_line(ln)]
-        if valid:
-            all_entries.append((img_path, valid))
 
-    print(f"[INFO] Total valid entries: {len(all_entries)}")
+# ---------------------------------------------------------------------------
+# Validation steps
+# ---------------------------------------------------------------------------
 
-    # Step 3: Shuffle and split
-    random.shuffle(all_entries)
-    total      = len(all_entries)
-    train_end  = int(total * TRAIN_SPLIT)
-    val_end    = train_end + int(total * VAL_SPLIT)
-
-    splits = {
-        "train" : all_entries[:train_end],
-        "val"   : all_entries[train_end:val_end],
-        "test"  : all_entries[val_end:],
-    }
-
-    for split_name, entries in splits.items():
-        print(f"[INFO] {split_name:5s} split: {len(entries)} images")
-
-    # Step 4: Write to output folders 
-    global_index = 0
-    for split_name, entries in splits.items():
-        for img_path, label_lines in entries:
-            copy_pair_to_split(
-                img_path, label_lines,
-                split_name, OUTPUT_PATH,
-                global_index
+def check_yaml_keys(cfg: dict) -> list[str]:
+    """Return a list of error strings for missing/invalid yaml keys."""
+    errors = []
+    required = ["train", "val", "nc", "names"]
+    for key in required:
+        if key not in cfg:
+            errors.append(f"  [MISSING KEY] '{key}' not found in data.yaml")
+    if "nc" in cfg and "names" in cfg:
+        if cfg["nc"] != len(cfg["names"]):
+            errors.append(
+                f"  [MISMATCH] nc={cfg['nc']} but len(names)={len(cfg['names'])}"
             )
-            global_index += 1
+    return errors
 
-    print(f"[INFO] All {global_index} image-label pairs written to {OUTPUT_PATH}")
 
-    # Step 5: Generate dataset.yaml
-    generate_dataset_yaml(OUTPUT_PATH, CLASS_NAMES)
+def validate_split(
+    split_name: str,
+    images_dir: Path,
+    labels_dir: Path,
+    class_names: list[str],
+    num_classes: int,
+) -> tuple[list[str], Counter]:
+    """
+    Validate one split. Returns (list_of_error_strings, class_counter).
+    """
+    errors = []
+    class_counts: Counter = Counter()
 
-    print("[INFO] Data preparation pipeline complete.")
+    # --- Directory existence ---
+    if not images_dir.exists():
+        errors.append(f"  [{split_name}] images dir not found: {images_dir}")
+    if not labels_dir.exists():
+        errors.append(f"  [{split_name}] labels dir not found: {labels_dir}")
+    if errors:
+        return errors, class_counts
+
+    images = collect_files(images_dir, IMAGE_EXTS)
+    labels = collect_files(labels_dir, (".txt",))
+
+    img_stems = {f.stem for f in images}
+    lbl_stems = {f.stem for f in labels}
+
+    # --- Parity check ---
+    orphan_imgs = img_stems - lbl_stems
+    orphan_lbls = lbl_stems - img_stems
+    if orphan_imgs:
+        errors.append(
+            f"  [{split_name}] {len(orphan_imgs)} image(s) have no label file"
+        )
+    if orphan_lbls:
+        errors.append(
+            f"  [{split_name}] {len(orphan_lbls)} label file(s) have no matching image"
+        )
+
+    # --- Label integrity ---
+    bad_lines = 0
+    for lbl_path in labels:
+        with open(lbl_path, "r") as f:
+            lines = [l.strip() for l in f if l.strip()]
+        for line in lines:
+            parts = line.split()
+            if len(parts) != 5:
+                bad_lines += 1
+                continue
+            try:
+                cls_idx = int(parts[0])
+                coords = [float(v) for v in parts[1:]]
+            except ValueError:
+                bad_lines += 1
+                continue
+
+            # Class index in range
+            if cls_idx < 0 or cls_idx >= num_classes:
+                errors.append(
+                    f"  [{split_name}] Invalid class index {cls_idx} in {lbl_path.name}"
+                )
+                continue
+
+            # Coordinates in [0, 1]
+            if not all(0.0 <= v <= 1.0 for v in coords):
+                errors.append(
+                    f"  [{split_name}] Coordinates out of [0,1] in {lbl_path.name}: {coords}"
+                )
+                continue
+
+            class_counts[class_names[cls_idx]] += 1
+
+    if bad_lines:
+        errors.append(
+            f"  [{split_name}] {bad_lines} malformed label line(s) (expected 5 values per line)"
+        )
+
+    return errors, class_counts
+
+
+# ---------------------------------------------------------------------------
+# Reporting
+# ---------------------------------------------------------------------------
+
+def print_summary(
+    split_stats: dict,
+    all_errors: list[str],
+    class_names: list[str],
+) -> None:
+    print("\n" + "=" * 60)
+    print("  DATASET VALIDATION SUMMARY")
+    print("=" * 60)
+
+    # Per-split counts
+    print(f"\n{'Split':<10} {'Images':>8} {'Labels':>8}")
+    print("-" * 30)
+    for split, stats in split_stats.items():
+        print(f"{split:<10} {stats['images']:>8} {stats['labels']:>8}")
+
+    # Class distribution
+    print(f"\n{'Class':<12} ", end="")
+    for split in split_stats:
+        print(f"{split:>10}", end="")
+    print(f"{'Total':>10}")
+    print("-" * (12 + 10 * (len(split_stats) + 1)))
+
+    totals: Counter = Counter()
+    for cls in class_names:
+        print(f"{cls:<12} ", end="")
+        row_total = 0
+        for split, stats in split_stats.items():
+            count = stats["class_counts"].get(cls, 0)
+            print(f"{count:>10}", end="")
+            row_total += count
+            totals[cls] += count
+        print(f"{row_total:>10}")
+    print("-" * (12 + 10 * (len(split_stats) + 1)))
+    grand = sum(totals.values())
+    print(f"{'TOTAL':<12} {'':>{10 * len(split_stats)}}{grand:>10}")
+
+    # Errors / warnings
+    print()
+    if all_errors:
+        print(f"  ISSUES FOUND ({len(all_errors)}):")
+        for e in all_errors:
+            print(e)
+        print("\n  Status: FAILED -- fix the issues above before training.")
+    else:
+        print("  Status: PASSED -- dataset looks clean.")
+    print("=" * 60 + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(description="Validate YOLOv8 dataset from Roboflow export")
+    parser.add_argument(
+        "--data",
+        type=str,
+        default="data/raw/data.yaml",
+        help="Path to data.yaml (default: data/raw/data.yaml)",
+    )
+    parser.add_argument(
+        "--report",
+        type=str,
+        default=None,
+        help="Optional path to save a JSON validation report",
+    )
+    args = parser.parse_args()
+
+    data_yaml_path = Path(args.data).resolve()
+    if not data_yaml_path.exists():
+        print(f"[ERROR] data.yaml not found at: {data_yaml_path}")
+        sys.exit(1)
+
+    cfg = load_yaml(data_yaml_path)
+    print(f"\nLoaded: {data_yaml_path}")
+    print(f"Classes ({cfg.get('nc', '?')}): {cfg.get('names', [])}")
+
+    all_errors = check_yaml_keys(cfg)
+    if all_errors:
+        for e in all_errors:
+            print(e)
+        sys.exit(1)
+
+    class_names: list[str] = cfg["names"]
+    num_classes: int = cfg["nc"]
+    splits = {
+        "train": cfg.get("train", ""),
+        "val":   cfg.get("val", ""),
+        "test":  cfg.get("test", ""),
+    }
+
+    split_stats = {}
+    for split_name, rel_path in splits.items():
+        if not rel_path:
+            print(f"  [SKIP] '{split_name}' not defined in data.yaml")
+            continue
+
+        images_dir, labels_dir = split_dirs(data_yaml_path, rel_path)
+        errors, class_counts = validate_split(
+            split_name, images_dir, labels_dir, class_names, num_classes
+        )
+        all_errors.extend(errors)
+
+        images = collect_files(images_dir, IMAGE_EXTS)
+        labels = collect_files(labels_dir, (".txt",))
+        split_stats[split_name] = {
+            "images": len(images),
+            "labels": len(labels),
+            "images_dir": str(images_dir),
+            "labels_dir": str(labels_dir),
+            "class_counts": dict(class_counts),
+        }
+
+    print_summary(split_stats, all_errors, class_names)
+
+    if args.report:
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report = {
+            "data_yaml": str(data_yaml_path),
+            "classes": class_names,
+            "splits": split_stats,
+            "errors": all_errors,
+            "passed": len(all_errors) == 0,
+        }
+        with open(report_path, "w") as f:
+            json.dump(report, f, indent=2)
+        print(f"Report saved to: {report_path}")
+
+    sys.exit(0 if not all_errors else 1)
 
 
 if __name__ == "__main__":
-    run_preparation_pipeline()
+    main()

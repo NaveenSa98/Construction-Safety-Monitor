@@ -1,137 +1,115 @@
-# Safety Rules Definition
+# Safety Rules — PPE Compliance Definitions
 
-## Overview
-
-This document defines the safety rules enforced by the Construction Site PPE Compliance
-Detection System. Rules are evaluated per detected worker using the model's output classes.
-The model directly detects both the presence and absence of each PPE item, so compliance
-is determined by which classes are detected on or near a worker.
-
-**Detection threshold:** Minimum confidence 0.50  
-**Annotation format:** YOLO bounding box per PPE item, per worker
+This document defines every safety rule applied by `compliance.py` to each detected worker. Rules are evaluated per worker using IoU-based spatial association between the worker bounding box and detected PPE bounding boxes.
 
 ---
 
-## Severity Levels & Worker Status
+## Rule Classification
 
-Rules are grouped into two severity tiers. The tier determines the worker-level status
-after all rules are evaluated.
+PPE is split into two tiers based on real-world construction site requirements:
 
-| Worker Status | Meaning | Action |
+| Tier | PPE Items | Effect if missing |
 | --- | --- | --- |
-| **COMPLIANT** | All evaluable rules passed | No action required |
-| **ALERT** | Critical rules passed; one or more high-severity rules failed | Remind worker to wear missing PPE |
-| **VIOLATION** | One or more critical rules failed | Worker must stop work immediately |
-| **UNVERIFIABLE** | Worker detection below confidence threshold | Treat as potential violation |
-
-**Critical rules (R1, R2, R6):** failure → `VIOLATION`  
-**High-severity rules (R3, R4, R5):** failure → `ALERT` only if critical rules passed
-
-> A supervisor seeing VIOLATION on every worker missing goggles loses trust in the system fast.
-> Separating "stop work" (VIOLATION) from "put this on" (ALERT) makes output actionable and
-> proportionate to actual risk.
-
-**Worker status resolution order (priority):**
-
-1. `UNVERIFIABLE` — worker detection confidence < 0.50
-2. `VIOLATION` — any critical rule (R1, R2, R6) failed
-3. `ALERT` — all critical rules passed; any high-severity rule (R3, R4, R5) failed
-4. `COMPLIANT` — all evaluable rules passed
+| **Critical** | Helmet, Vest, Boots | Worker marked non-compliant → scene is **UNSAFE** |
+| **Advisory** | Gloves, Goggles | Worker flagged with alert → scene is **ALERT** (not UNSAFE) |
 
 ---
 
-## Rule R1 — Hard Hat Required
+## Rules
 
-**Requirement:** Every worker on site must wear a hard hat at all times.
+### R1 — Safety Helmet (Critical)
 
-**Compliant:** `Hardhat` class detected overlapping the worker's head region.  
-**Violation:** `NO-Hardhat` class detected, or no helmet detection associated with the worker.
+Every worker must have a helmet detection spatially associated with their bounding box.
 
-**Severity:** Critical
+**Violation:** No helmet detection overlaps the worker's bbox within the expected head region (top 60% of person bbox).
 
----
-
-## Rule R2 — High-Visibility Vest Required
-
-**Requirement:** Every worker must wear a high-visibility safety vest.
-
-**Compliant:** `Safety Vest` class detected overlapping the worker's torso region.  
-**Violation:** `NO-Safety Vest` class detected, or no vest detection associated with the worker.
-
-**Severity:** Critical
+**Why critical:** Head injury is the leading cause of fatal accidents on construction sites. A helmet is mandatory at all times in any active work zone.
 
 ---
 
-## Rule R3 — Safety Boots Required
+### R2 — Safety Vest (Critical)
 
-**Requirement:** Workers must wear safety boots. Casual shoes, sandals, or bare feet are not permitted.
+Every worker must have a high-visibility vest detection overlapping their torso region.
 
-**Compliant:** `Safety Boots` class detected in the worker's lower body region.  
-**Violation:** `NO-Safety Boots` class detected in the lower body region.  
-**Not evaluable:** Lower body / foot region not visible in the frame.
+**Violation:** No vest detection overlaps the worker's bbox within the torso region (10%–90% of person height).
 
-**Severity:** High
+**Why critical:** Visibility vests are required for workers in all active zones to prevent struck-by incidents from plant and machinery.
 
 ---
 
-## Rule R4 — Protective Gloves Required
+### R3 — Safety Boots (Critical)
 
-**Requirement:** Workers handling materials, tools, or equipment must wear protective gloves.
+Every worker must have safety boots detected at the lower portion of their bounding box.
 
-**Compliant:** `Safety Gloves` class detected overlapping the worker's hand region.  
-**Violation:** `NO-Safety Gloves` class detected in the hand region.  
-**Not evaluable:** Hands not visible in the frame.
+**Violation:** No boots detection overlaps the worker's bbox within the foot region (bottom 40% of person height).
 
-**Severity:** High
+**Why critical:** Safety boots protect against crush injuries, puncture wounds, and slips on construction surfaces.
 
 ---
 
-## Rule R5 — Safety Goggles Required
+### R4 — Safety Gloves (Advisory)
 
-**Requirement:** Workers must wear safety goggles when operating in environments with dust, debris, sparks, or chemical exposure.
+Workers should have gloves detected when handling materials or equipment.
 
-**Compliant:** `Safety Goggles` class detected overlapping the worker's facial region.  
-**Violation:** `NO-Safety Goggles` class detected in the facial region.  
-**Not evaluable:** Face not sufficiently visible or too distant to resolve.
+**Violation:** No gloves detection associated with the worker.
 
-**Severity:** High
+**Why advisory:** Gloves are task-dependent — not all construction activities require them (e.g. supervision, inspection). A missing gloves detection triggers an ALERT rather than UNSAFE.
 
----
-
-## Rule R6 — Full Basic PPE Compliance
-
-**Requirement:** Every worker must simultaneously satisfy R1 (hard hat) and R2 (hi-vis vest) at minimum. This is the baseline compliance check applied to every person detected on site.
-
-**Compliant:** Both `Hardhat` and `Safety Vest` detected on the worker.  
-**Violation:** Either R1 or R2 is violated.
-
-**Severity:** Critical
+**Data limitation:** Gloves are small objects and frequently occluded. Detection recall for this class is lower than for larger PPE items.
 
 ---
 
-## Notes on Detection Behaviour
+### R5 — Safety Goggles (Advisory)
 
-- **Positive classes** (`Hardhat`, `Safety Vest`, `Safety Boots`, `Safety Gloves`, `Safety Goggles`) confirm PPE is worn correctly.
-- **Negative classes** (`NO-Hardhat`, `NO-Safety Vest`, `NO-Safety Boots`, `NO-Safety Gloves`, `NO-Safety Goggles`) are explicitly trained signals that a worker is missing that item. A violation is raised when either a negative class is detected or when no corresponding positive class is detected for a visible body region.
+Workers should have goggles or eye protection detected in the face region.
+
+**Violation:** No goggles detection associated with the worker's head area.
+
+**Why advisory:** Eye protection is task-specific (grinding, cutting, chemical handling). Not all workers in a scene require goggles simultaneously.
+
+**Data limitation:** Goggles are small, close to the face, and often partially obscured by helmets. This class has the lowest detection rate in the dataset.
+
+---
+
+### R7 — PPE Confidence Gate
+
+All PPE detections must exceed a minimum confidence threshold before being used in rule evaluation. Low-confidence detections are discarded to prevent partial or ambiguous detections from being counted as valid PPE.
+
+**Per-class thresholds:**
+
+| Class | Min Confidence |
+| --- | --- |
+| helmet | 0.50 |
+| vest | 0.45 |
+| boots | 0.25 |
+| gloves | 0.20 |
+| goggles | 0.20 |
+| person | 0.50 |
+
+Thresholds are lower for small/difficult classes (gloves, goggles, boots) to reduce false negatives.
 
 ---
 
-## Scene-Level Verdict
+## R6 — Belt/Harness (Removed)
 
-After evaluating all detected workers:
-
-| **SAFE** | All detected workers are compliant with all applicable rules. |
-| **UNSAFE** | One or more workers are in violation of any rule. |
-| **UNVERIFIABLE** | One or more workers are partially occluded or below the confidence threshold. Treated as a potential violation. |
-
-## Future Extensions (Post-Core Development)
-
-The following rules are planned for implementation after the core detection pipeline is
-complete and validated:
-
-- **R9 — Zone-Based PPE Rules:** Stricter or additional PPE requirements enforced within
-  designated high-risk spatial zones (e.g., proximity to heavy machinery, excavation zones).
-- **R10 — Temporal Behaviour Analysis:** Detection of recurring or sustained violations
-  across multiple video frames, enabling pattern-based alerting.
+A safety harness rule was considered but removed because the `belt` class has very limited representation in the training dataset. Enforcing a rule backed by insufficient training data would produce unreliable results. This rule can be re-enabled once more annotated harness examples are available.
 
 ---
+
+## Spatial Association Logic
+
+A PPE item is associated with a worker if:
+
+1. **IoU** between the PPE bbox and the worker bbox (expanded by 15%) exceeds 0.10
+2. **Vertical zone** check passes — the PPE centre falls within the expected body region for that PPE type
+3. **Exclusive assignment** — each PPE item is assigned to the highest-overlap worker only
+
+---
+
+## Scene Verdict
+
+| Verdict | Condition |
+| --- | --- |
+| **SAFE** | All workers compliant on all rules (critical + advisory) |
+| **ALERT** | All workers have critical PPE — advisory PPE missing on at least one worker |
+| **UNSAFE** | At least one worker missing any critical PPE (R1, R2, or R3) |

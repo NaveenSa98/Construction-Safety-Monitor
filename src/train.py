@@ -1,91 +1,80 @@
 """
-YOLOv8 fine-tuning script for PPE compliance detection
+train.py
+--------
+YOLOv8s transfer-learning training script.
+Designed to run in Google Colab (free tier, T4 GPU).
 
+Usage (in Colab):
+    !python src/train.py
 """
+
 from pathlib import Path
+import sys
+
 from ultralytics import YOLO
-import shutil
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-DATASET_YAML = PROJECT_ROOT / "data" / "processed" / "dataset.yaml"
+# ---------------------------------------------------------------------------
+# Configuration — edit these values before running
+# ---------------------------------------------------------------------------
 
-PRETRAINED_WEIGHTS = "yolov8m.pt" # Medium model 
-PROJECT_DIR = PROJECT_ROOT / "outputs" / "training_runs"
-RUN_NAME = "ppe_detection_v2"
+DATA_YAML   = "data/raw/data.yaml"   # path to Roboflow-exported data.yaml
+WEIGHTS     = "yolov8s.pt"           # COCO-pretrained; auto-downloaded on first run
+EPOCHS      = 25                     # 20–30 is sufficient for this dataset size
+BATCH       = 16                     # safe default for T4 (15 GB) + YOLOv8s @ 640 px
+IMGSZ       = 640                    # standard YOLOv8 input resolution
+RUN_NAME    = "ppe_yolov8s"          # weights saved to runs/train/<RUN_NAME>/weights/
 
-# Training configuration
+# ---------------------------------------------------------------------------
 
-TRAINING_CONFIG = {
-    "data"            : str(DATASET_YAML),
-    "epochs"          : 100,
-    "imgsz"           : 640,        
-    "batch"           : -1,         # Auto-select batch
-    "patience"        : 30,         # Allow more room before early stopping fires
-    "pretrained"      : True,
-    "optimizer"       : "AdamW",
-    "lr0"             : 0.001,     
-    "lrf"             : 0.1,        # Final LR = lr0 × lrf → 0.0001; gentler decay than 0.01
-    "cos_lr"          : True,       # Cosine LR schedule — smoother decay, better final mAP
-    "weight_decay"    : 0.0005,
-    "warmup_epochs"   : 3,
-    "momentum"        : 0.937,      # Adam beta1
-    "mosaic"          : 1.0,        # Mosaic augmentation — critical for small-object detection
-    "close_mosaic"    : 10,         # Disable mosaic in final 10 epochs for clean refinement
-    "flipud"          : 0.0,        # No vertical flip — unnatural for site images
-    "fliplr"          : 0.5,        # Horizontal flip
-    "hsv_h"           : 0.015,      # Hue shift — handles varied lighting on site
-    "hsv_s"           : 0.7,        # Saturation shift
-    "hsv_v"           : 0.4,        # Brightness shift — important for indoor/outdoor variation
-    "degrees"         : 5.0,        # Slight rotation — workers lean/tilt slightly
-    "translate"       : 0.1,        # Translation augmentation
-    "scale"           : 0.5,        # Scale variation
-    "amp"             : True,    
-    "cache"           : True,   
-    "save_period"     : 10,        
-    "seed"            : 42,       
-    "project"         : str(PROJECT_DIR),
-    "name"            : RUN_NAME,
-    "exist_ok"        : True,
-    "verbose"         : True,
-    "device"          : 0,         
-    "workers"         : 2,         
-    "val"             : True,
-    "save"            : True,
-    "plots"           : True,       # Auto-generate training curve plots
-}
 
-# Training pipeline
+def main():
+    data_yaml = Path(DATA_YAML).resolve()
+    if not data_yaml.exists():
+        print(f"[ERROR] data.yaml not found: {data_yaml}")
+        sys.exit(1)
 
-def run_training_pipeline() -> None:
+    print("\n" + "=" * 55)
+    print("  PPE DETECTION — YOLOv8s TRAINING")
+    print("=" * 55)
+    print(f"  data     : {data_yaml}")
+    print(f"  weights  : {WEIGHTS}")
+    print(f"  epochs   : {EPOCHS}")
+    print(f"  batch    : {BATCH}")
+    print(f"  imgsz    : {IMGSZ}")
+    print(f"  run name : {RUN_NAME}")
+    print("=" * 55 + "\n")
 
-    print("[INFO] Initialising YOLOv8 model...")
-    model = YOLO(PRETRAINED_WEIGHTS)
+    # Load COCO-pretrained YOLOv8s — Ultralytics auto-downloads on first run
+    model = YOLO(WEIGHTS)
 
-    print(f"[INFO] Pretrained weights loaded : {PRETRAINED_WEIGHTS}")
-    print(f"[INFO] Dataset                   : {DATASET_YAML}")
-    print(f"[INFO] Epochs                    : {TRAINING_CONFIG['epochs']}")
-    print(f"[INFO] Image size                : {TRAINING_CONFIG['imgsz']}")
-    print(f"[INFO] Batch size                : {TRAINING_CONFIG['batch']}")
-    print(f"[INFO] Output directory          : {PROJECT_DIR / RUN_NAME}")
-    print("[INFO] Starting training...\n")
+    model.train(
+        data=str(data_yaml),
+        epochs=EPOCHS,
+        batch=BATCH,
+        imgsz=IMGSZ,
+        name=RUN_NAME,
+        # Reproducibility
+        seed=42,
+        deterministic=True,
+        # Colab T4 settings
+        device=0,       # GPU
+        workers=2,      # safe for Colab free tier
+        cache=False,    # avoid RAM pressure
+        # Saving
+        save=True,
+        save_period=-1, # save only best + last (no mid-run checkpoints)
+        # Logging
+        plots=True,     # training curves saved to run directory
+        verbose=True,
+    )
 
-    results = model.train(**TRAINING_CONFIG)
+    best = Path("runs") / "train" / RUN_NAME / "weights" / "best.pt"
+    print("\n" + "=" * 55)
+    print(f"  Training complete.")
+    print(f"  Best weights : {best if best.exists() else f'runs/train/{RUN_NAME}/weights/best.pt'}")
+    print("=" * 55 + "\n")
 
-    print("\n[INFO] Training complete.")
-    print(f"[INFO] Best weights saved to : "
-          f"{PROJECT_DIR / RUN_NAME / 'weights' / 'best.pt'}")
-
-    # Copy best weights to models
-    best_weights_src  = PROJECT_DIR / RUN_NAME / "weights" / "best.pt"
-    best_weights_dest = PROJECT_ROOT / "models" / "best.pt"
-    best_weights_dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(best_weights_src, best_weights_dest)
-    print(f"[INFO] Best weights copied to  : {best_weights_dest}")
-
-    return results
 
 if __name__ == "__main__":
-    run_training_pipeline()
-
-
+    main()

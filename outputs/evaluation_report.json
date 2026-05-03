@@ -1,0 +1,70 @@
+{
+  "weights": "models/best.pt",
+  "data_yaml": "data/raw/data.yaml",
+  "split": "test",
+  "overall": {
+    "precision": 0.7515,
+    "recall": 0.6584,
+    "map50": 0.7503,
+    "map50_95": 0.4569
+  },
+  "per_class": [
+    {
+      "class": "belt",
+      "precision": 0.0,
+      "recall": 0.0,
+      "map50": 0.0608,
+      "map50_95": 0.0133,
+      "weak": true
+    },
+    {
+      "class": "boot",
+      "precision": 0.8158,
+      "recall": 0.8095,
+      "map50": 0.9134,
+      "map50_95": 0.5696,
+      "weak": false
+    },
+    {
+      "class": "gloves",
+      "precision": 0.8469,
+      "recall": 0.4792,
+      "map50": 0.7239,
+      "map50_95": 0.4066,
+      "weak": false
+    },
+    {
+      "class": "goggles",
+      "precision": 0.9769,
+      "recall": 0.8125,
+      "map50": 0.842,
+      "map50_95": 0.4438,
+      "weak": false
+    },
+    {
+      "class": "helmat",
+      "precision": 0.8864,
+      "recall": 0.9783,
+      "map50": 0.9641,
+      "map50_95": 0.5965,
+      "weak": false
+    },
+    {
+      "class": "person",
+      "precision": 0.9193,
+      "recall": 0.8769,
+      "map50": 0.9442,
+      "map50_95": 0.6789,
+      "weak": false
+    },
+    {
+      "class": "vest",
+      "precision": 0.8149,
+      "recall": 0.6524,
+      "map50": 0.8036,
+      "map50_95": 0.49,
+      "weak": false
+    }
+  ],
+  "weak_threshold": 0.5
+}

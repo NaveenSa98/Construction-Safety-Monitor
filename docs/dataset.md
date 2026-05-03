@@ -1,48 +1,96 @@
 # Dataset Documentation
 
-## How the Dataset Was Built
+## Overview
 
-The training dataset was created by taking three existing public datasets and extending them with a fourth specialised source to cover all required PPE classes. All four sources use YOLO `.txt` annotation format. Class names were remapped to a shared master list and duplicate images were removed before merging.
-
-- **Final size: 4000 images · 12 classes · 70 / 20 / 10 split**
-
----
-
-## Sources
-
-| 1 | PPE Detection | Roboflow — tanish-y7iqo/ppe-detection_data-adcya v3 | 2,801 | Hardhat, Vest, Boots, Gloves, Goggles, Mask |
-| 2 | Construction PPE | Ultralytics — construction-ppe.yaml | 1,416 | Person, Hardhat, Vest, Boots, Gloves, Goggles + NO- variants |
-| 3 | Construction Site Safety | Roboflow — roboflow-universe-projects/construction-site-safety | ~2,000* | Person, Hardhat, NO-Hardhat, Safety Vest, NO-Safety Vest |
-| 4 | Safety PPE | Hugging Face — safety-jmser/safety_ppe | 6,629 | Full PPE set including Safety Harness, Boots, Gloves, Goggles + NO- variants |
-
-*PPE-relevant subset only. Source 3 originally contains 25 classes; the 18 non-PPE classes (vehicles, machinery, etc.) were dropped.
+| Property | Value |
+| --- | --- |
+| Total images | 500 |
+| Annotation tool | Roboflow |
+| Export format | YOLOv8 (images + .txt labels + data.yaml) |
+| Number of classes | 7 |
+| License | CC BY 4.0 |
 
 ---
 
-## My Additions
+## Source
 
-Source 3 (Roboflow Construction Site Safety) was used as the **base dataset**. The following three sources were added to extend coverage across all required PPE classes:
+Images were sourced and annotated via Roboflow:
 
-- **Source 1** was added to introduce Safety Boots, Safety Gloves, and Safety Goggles annotations, which are absent in the base dataset.
-- **Source 2** was added for its negative classes (NO-Hardhat, NO-Safety Vest, NO-Safety Boots, NO-Safety Gloves, NO-Safety Goggles), which are essential for violation detection.
-- **Source 4** was added as the sole source covering Safety Harness and NO-Safety Harness, and to further strengthen Boot and Glove class representation.
-
-All class names were normalised to a unified 12-class scheme using a custom merging script (`build_dataset.py`). Duplicate images were removed using SHA-256 exact hashing and perceptual hashing (pHash).
-
----
-
-## Class List
-
-| 0 | Person                      | 6 | NO-Hardhat |
-| 1 | Hardhat                     | 7 | NO-Safety Vest |
-| 2 | Safety Vest                 | 8 | NO-Safety Boots |
-| 3 | Safety Boots                | 9 | NO-Safety Gloves |
-| 4 | Safety Gloves               | 10 | NO-Safety Goggles |
-| 5 | Safety Goggles
+- **Workspace:** zukoos-workspace
+- **Project:** construction-ppe-fwz4e
+- **Version:** 1
+- **URL:** <https://universe.roboflow.com/zukoos-workspace/construction-ppe-fwz4e/dataset/1>
 
 ---
 
-## Known Limitations
+## Classes
 
-- **Lighting coverage** is limited to daylight and indoor construction conditions. Nighttime or low-light performance is not guaranteed.
-- **Class imbalance** exists — core classes (Person, Hardhat, Safety Vest) have significantly more annotations than Goggles and Harness.
+| ID | Class Name | PPE Type | Tier |
+| --- | --- | --- | --- |
+| 0 | belt | Safety harness/belt | Removed (R6) |
+| 1 | boot | Safety boots | Critical |
+| 2 | gloves | Safety gloves | Advisory |
+| 3 | goggles | Safety goggles | Advisory |
+| 4 | helmat | Safety helmet | Critical |
+| 5 | person | Worker (person) | — |
+| 6 | vest | High-visibility vest | Critical |
+
+> **Note:** The class name `helmat` is a typo in the original Roboflow annotation — it is preserved as-is to match the exported `data.yaml` and trained model weights.
+
+---
+
+## Dataset Split
+
+Splits were created automatically by Roboflow during export.
+
+| Split | Images |
+| --- | --- |
+| Train | ~400 |
+| Validation | ~50 |
+| Test | ~50 |
+
+Exact counts can be verified by running:
+
+```bash
+python src/data_preparation.py --data data/raw/data.yaml
+```
+
+---
+
+## Annotation Approach
+
+- All images were manually annotated using the Roboflow web interface
+- Each visible worker and PPE item was labelled with a tight bounding box
+- Partially visible objects were annotated if more than 50% of the object was visible
+- One image (`image314_jpg.rf...`) contained a segmentation polygon annotation (belt, class 0) which was converted to a bounding box during data preparation
+
+---
+
+## Known Data Limitations
+
+| Class | Limitation |
+| --- | --- |
+| **goggles** | Underrepresented — goggles are often not worn or not visible, so few positive examples exist |
+| **gloves** | Small object, frequently occluded by tools or the worker's body |
+| **belt** | Very few annotated examples — rule R6 was removed because of this |
+| **boot** | Lower body is often partially out of frame, especially for close-up shots |
+
+These limitations directly affect per-class mAP scores. See `outputs/evaluation_report.json` for quantitative results.
+
+---
+
+## Data Preparation
+
+The `data_preparation.py` script validates the dataset before training:
+
+- Confirms train/valid/test directory structure exists
+- Checks image-label parity (no orphan files)
+- Validates label format (5 values per line: class cx cy w h)
+- Reports class distribution per split
+- Flags any malformed annotations
+
+Run it before training to ensure the dataset is clean:
+
+```bash
+python src/data_preparation.py --data data/raw/data.yaml
+```

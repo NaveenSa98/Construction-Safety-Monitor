@@ -1,302 +1,191 @@
-# 🏗️ Construction Site PPE Compliance Monitor
+# Construction Site PPE Compliance Monitoring System
 
-> **Protective Equipment detection and safety compliance
-> verification for construction site environments using YOLOv8.**
-
----
-
-## Table of Contents
-
-1. [Project Overview](#1-project-overview)
-2. [Prerequisites](#2-prerequisites)
-3. [Setup Instructions](#3-setup-instructions)
-4. [Repository Structure](#4-repository-structure)
-5. [Dataset Documentation](#5-dataset-documentation)
-6. [Model Architecture](#6-model-architecture)
+A computer vision system that detects construction workers in images or video and determines whether each worker is wearing the required Personal Protective Equipment (PPE). The system returns a per-worker compliance status and a scene-level verdict of **SAFE**, **ALERT**, or **UNSAFE**.
 
 ---
 
-## 1. Project Overview
-
-### What This System Does
-
-This system takes a single image, a directory of images, or a video file
-from a construction site and automatically determines whether each visible
-worker is wearing the required Personal Protective Equipment (PPE).
-
-For every input frame it produces:
-
-- **Annotated output image** — colour-coded bounding boxes per worker
-- **Scene-level verdict** — `SAFE`, `VIOLATION`,`ALERT`, and  `UNVERIFIABLE`
-- **Structured JSON report** — per-worker rule results and violation descriptions
-
-### Safety Rules Enforced
-
-| Rule | Requirement | Severity |
-|------|-------------|----------|
-
-| R1 | Hard Hat Required | Critical |
-| R2 | High-Visibility Vest Required | Critical |
-| R3 | Safety Boots Required| High |
-| R4 | Protective Gloves Required | High |
-| R5 | Safety Goggles Required| High |
-| R6 | Full Basic PPE Compliance | Critical |
-
-> Full rule definitions with violation examples:
-> [`docs/safety_rules.md`](docs/safety_rules.md)
-
-### Approach Summary
+## Project Structure
 
 ```text
-COCO Pretrained YOLOv8n Weights
-            ↓
-  Fine-tuned on merged PPE dataset
-  (4 sources, 11 classes, 3500 images)
-            ↓
-  Post-processing Compliance Engine
-  (Rule evaluation via bounding box
-   overlap against anatomical regions)
-            ↓
-  Annotated Output + JSON Report
+Construction-Safety-Monitor/
+├── data/
+│   └── raw/                  # Roboflow-exported dataset (YOLOv8 format)
+│       ├── train/
+│       ├── valid/
+│       ├── test/
+│       └── data.yaml
+├── models/
+│   └── best.pt               # Trained weights (copied from Colab)
+├── notebooks/
+│   └── training.ipynb        # Colab training notebook
+├── outputs/                  # Evaluation reports, annotated results
+├── src/
+│   ├── data_preparation.py   # Dataset validation
+│   ├── train.py              # Model training (Colab)
+│   ├── compliance.py         # PPE rule logic
+│   ├── inference.py          # End-to-end inference pipeline
+│   └── evaluate.py           # Formal model evaluation
+└── docs/
+    ├── safety_rules.md       # Rule definitions (R1–R5, R7)
+    └── dataset.md            # Dataset provenance and class distribution
 ```
 
 ---
 
-The system follows a strict separation of concerns across five layers:
+## Quick Start — Local Inference
 
----
-
-Data Ingestion → Dataset Pipeline → Model Detection → Compliance Engine → Output & Reporting
-
----
-
-## 2. Prerequisites
-
-### System Requirements
-
-| Requirement | Minimum | Recommended |
-|-------------|---------|-------------|
-
-| Python | 3.10 | 3.11 |
-| RAM | 8 GB | 16 GB |
-| GPU (for training) | — | Colab GPU T4 free tire |
-| GPU (for inference) | — | Optional — CPU works |
-
----
-
-## 3. Setup Instructions
-
-### 3.1 — Clone the Repository
+### 1. Install dependencies
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/construction-safety-monitor.git
-cd construction-safety-monitor
+pip install ultralytics opencv-python pyyaml
 ```
 
-### 3.2 — Create and Activate the Conda Environment
+### 2. Download trained weights
 
-```bash
-conda create -n ppe-monitor python=3.11 -y
-conda activate ppe-monitor
-```
+Copy `best.pt` from your Google Drive into the `models/` folder:
 
-### 3.3 — Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-**`requirements.txt` contents:**
-
-ultralytics>=8.0.0
-opencv-python>=4.8.0
-roboflow>=1.1.0
-matplotlib>=3.7.0
-Pillow>=10.0.0
-numpy>=1.24.0
-pandas>=2.0.0
-PyYAML>=6.0
-imagehash>=4.3.0
-
-### 3.4 — Download Model Weights
-
-Pre-trained weights are available in the `models/` directory of this
-repository. If they are not present, download them from the Colab
-training notebook output or re-train using the instructions below.
-
-Verify the weights file is in place:
-
-```bash
-# Expected location
+```text
 models/best.pt
 ```
 
----
-
-### 3.5 — Run Inference
-
-#### On a Single Image
+### 3. Run on a single image
 
 ```bash
-python src/inference.py --source path/to/image.jpg
+python src/inference.py --weights models/best.pt --source data/raw/test/images/your_image.jpg
 ```
 
-#### On a Directory of Images
+### 4. Save annotated result
 
 ```bash
-python src/inference.py --source path/to/images/
+python src/inference.py --weights models/best.pt --source data/raw/test/images/your_image.jpg --output outputs/result.jpg
 ```
 
-#### On a Video File
+### 5. Run on a video file
 
 ```bash
-python src/inference.py --source path/to/video.mp4
+python src/inference.py --weights models/best.pt --source path/to/video.mp4 --output outputs/result.mp4
 ```
 
-#### With a Custom Weights File
+### 6. Live webcam
 
 ```bash
-python src/inference.py --source path/to/image.jpg --weights models/best.pt
+python src/inference.py --weights models/best.pt --source 0
 ```
-
-#### Display Output Window During Inference
-
-```bash
-python src/inference.py --source path/to/image.jpg --show
-```
-
-**Output locations:**
-
-| Output Type | Location |
-|-------------|----------|
-
-| Annotated images / video | `outputs/sample_predictions/` |
-| JSON violation reports | `outputs/reports/` |
 
 ---
 
-### 3.6 — Run Evaluation on Test Set
+## Training in Google Colab
 
-```bash
-python src/evaluate.py --weights models/best.pt --split test
-```
+### 1. Upload project to Google Drive
 
-**Evaluation outputs:**
-
-| Output | Location |
-|--------|----------|
-
-| Per-class mAP chart | `outputs/evaluation/per_class_map50.png` |
-| Precision/Recall chart | `outputs/evaluation/precision_recall_per_class.png` |
-| Summary table | `outputs/evaluation/evaluation_summary_table.png` |
-| Full JSON report | `outputs/evaluation/evaluation_report.json` |
-| Failure case images | `outputs/evaluation/failure_cases/` |
-
----
-
-### 3.7 — Re-train the Model (Google Colab)
-
-1. Open the training notebook:
-   [`notebooks/construction_safety_training.ipynb`](notebooks/construction_safety_training.ipynb)
-2. Set the Colab runtime to **T4 GPU**:
-   `Runtime → Change runtime type → T4 GPU`
-3. Run all cells sequentially
-4. Training takes approximately **60–90 minutes** on a T4 GPU
-5. Best weights are saved automatically to `models/best.pt`
-
----
-
-## 4. Repository Structure
+Upload the entire project folder to:
 
 ```text
-construction-safety-monitor/
-│
-├── data/
-│   ├── raw/                                            
-│   └── processed/                  
-│       ├── images/
-│       │   ├── train/              
-│       │   ├── val/                
-│       │   └── test/               
-│       ├── labels/
-│       │   ├── train/
-│       │   ├── val/
-│       │   └── test/
-│       └── dataset.yaml            
-│
-├── src/
-│   ├── data_preparation.py         
-│   ├── train.py                   
-│   ├── compliance.py              
-│   ├── inference.py                
-│   └── evaluate.py                
-│
-├── notebooks/
-│   └── training.ipynb   
-│
-├── models/
-│   └── best.pt                     
-│
-├── outputs/
-│   ├── sample_predictions/        
-│   ├── reports/                    
-│   └── evaluation/                 
-│       └── failure_cases/          
-│
-├── docs/
-│   ├── safety_rules.md             
-│   └── dataset.md                  
-│
-├── requirements.txt
-└── README.md
-|__ TECHNICAL_NOTES.md
+MyDrive/Construction-Safety-Monitor/
+```
+
+### 2. Open the notebook in VS Code
+
+Open `notebooks/training.ipynb` and connect to a Colab runtime with **T4 GPU**.
+
+### 3. Run all cells
+
+The notebook will:
+
+1. Verify GPU
+2. Mount Google Drive
+3. Install dependencies
+4. Download dataset from Roboflow
+5. Fix known label issues
+6. Validate dataset
+7. Train for 25 epochs
+8. Display training curves
+
+Trained weights are saved automatically to:
+
+```text
+runs/train/ppe_yolov8s/weights/best.pt
 ```
 
 ---
 
-## 5. Dataset Documentation
+## Validate Dataset
 
-> Full dataset documentation including class distribution, annotation
-> [`docs/dataset.md`](docs/dataset.md)
+```bash
+python src/data_preparation.py --data data/raw/data.yaml
+```
 
 ---
 
-## 6. Model Architecture
+## Evaluate Model
 
-### Model
+```bash
+python src/evaluate.py --weights models/best.pt --data data/raw/data.yaml
+```
 
-| Property | Value |
-|----------|-------|
+Results are saved to `outputs/evaluation_report.json`.
 
-| Architecture | YOLOv8n (nano) |
-| Framework | Ultralytics YOLOv8 |
-| Pretrained Weights | COCO (80-class general detection) |
-| Parameters | ~3.2M |
-| Input Resolution | 640 × 640 |
-| Task | Multi-class object detection |
+---
 
-### Why YOLOv8
+## Scene Verdict Logic
 
-YOLOv8 was selected for the following reasons:
+| Verdict | Condition |
+| --- | --- |
+| **SAFE** | Every worker has helmet + vest + boots + gloves + goggles |
+| **ALERT** | Every worker has helmet + vest + boots, but gloves or goggles missing |
+| **UNSAFE** | Any worker is missing helmet, vest, or boots |
 
-- **Single-pass detection** — detects all objects in one forward pass,
-  making it suitable for real-time or near-real-time site monitoring
-- **COCO pretraining** — the `person` class is already well-learned,
-  providing a strong starting point for worker detection
-- **Ultralytics API** — clean, well-documented Python interface that
-  separates training, validation, and inference cleanly
+---
 
-### Training Configuration
+## Architecture & Design Decisions
 
-| Hyperparameter | Value | Rationale |
-|----------------|-------|-----------|
+### Model — YOLOv8s
 
-| Epochs | 100 (early stopping) | Sufficient for convergence |
-| Image size | 640 × 640 | Standard YOLO input |
-| Batch size | 16 | Optimal for Colab T4 GPU |
-| Optimizer | AdamW | Better convergence than SGD for fine-tuning |
-| Initial LR | 0.001 | Conservative for pretrained weights |
-| Early stopping patience | 20 epochs | Prevents overfitting |
-| Mosaic augmentation | Enabled | Improves small object detection |
-| Horizontal flip | 0.5 | Natural for construction site images |
-| Vertical flip | Disabled | Unnatural for site images |
+YOLOv8s (small) was chosen over larger variants because:
+
+- The dataset is only 500 images — larger models would overfit
+- Colab free tier (T4) handles YOLOv8s at batch=16 comfortably
+- Inference speed is suitable for real-time video
+
+### compliance.py is decoupled from inference.py
+
+Detection (what objects are in the frame) and compliance (are the rules satisfied) are kept in separate modules. This means the compliance logic can be tested independently and the detection model can be swapped without changing any rule logic.
+
+### IoU-based PPE association with expanded bbox
+
+Each PPE item is assigned to the worker whose bounding box has the highest IoU with the PPE box. The worker bbox is expanded by 15% before IoU computation to handle PPE detected at the edges (e.g. helmet above a bent-forward worker).
+
+### Vertical zone heuristics
+
+Each PPE type is only accepted within a plausible vertical region of the worker's bbox (e.g. helmets in the top 60%, boots in the bottom 40%). This prevents a helmet from a nearby worker being credited to the wrong person.
+
+### Two-tier PPE classification
+
+- **Critical PPE** (helmet, vest, boots) — missing any → UNSAFE
+- **Advisory PPE** (gloves, goggles) — missing → ALERT only
+
+This reflects real construction site practice where helmets, vests and boots are mandatory at all times, while gloves and goggles depend on the task.
+
+---
+
+## Known Limitations
+
+| Limitation | Detail |
+| --- | --- |
+| Small dataset | 500 images is limited. Rare classes (goggles, gloves) have less training data and lower mAP |
+| Occlusion | Heavily occluded PPE (e.g. gloves behind the body) will not be detected |
+| Bent/crouching workers | Person bbox may not fully contain the head — bbox expansion partially mitigates this |
+| No tracking | Each frame is evaluated independently — no temporal smoothing across video frames |
+| Single camera angle | Model trained on a specific dataset — performance may vary with different camera angles or lighting |
+
+---
+
+## Per-Class Evaluation Results
+
+Run `evaluate.py` to generate up-to-date results. Expected weak classes based on dataset size:
+
+- **goggles** — underrepresented in training data
+- **gloves** — small, frequently occluded
+- **boots** — lower body often partially out of frame
+
+See `outputs/evaluation_report.json` for full results after evaluation.

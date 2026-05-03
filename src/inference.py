@@ -1,666 +1,612 @@
 """
-End-to-end inference pipeline for PPE compliance detection.
+inference.py
+------------
+End-to-end PPE compliance inference pipeline.
+Loads trained YOLOv8s weights, runs detection on an image / video / webcam,
+passes detections to compliance.py, and renders annotated output.
 
-Accepts a single image, a directory of images, or a video file.
-For each input frame:
-    1. Runs YOLOv8 object detection
-    2. Passes detections to the compliance engine
-    3. Renders annotated output with colour-coded worker boxes
-    4. Saves a structured JSON violation report
+Usage:
+    # Single image
+    python src/inference.py --weights models/best.pt --source image.jpg
 
+    # Video file
+    python src/inference.py --weights models/best.pt --source video.mp4 --output out.mp4
+
+    # Webcam
+    python src/inference.py --weights models/best.pt --source 0
+
+    # Save annotated image
+    python src/inference.py --weights models/best.pt --source image.jpg --output result.jpg
 """
 
 import argparse
-import json
-import time
+import sys
+from pathlib import Path
+
 import cv2
 import numpy as np
-from pathlib import Path
 from ultralytics import YOLO
-from datetime import datetime
 
-import sys
-
-sys.path.append(str(Path(__file__).resolve().parent))
-
-from compliance import (
-    evaluate_scene,
-    SceneVerdict,
-    WorkerStatus,
-  
-)
+from compliance import check_compliance, CONF_THRESHOLDS
 
 
-# Configuration
 
-DEFAULT_WEIGHTS     = Path("models/best.pt")
-PERSON_WEIGHTS      = "yolov8n.pt" 
-OUTPUT_IMAGES_DIR   = Path("outputs/sample_predictions")
-OUTPUT_REPORTS_DIR  = Path("outputs/reports")
 
-# Confidence threshold passed to YOLOv8 at inference time
-YOLO_CONF_THRESHOLD   = 0.10   # Lower than compliance threshold to capture
-PERSON_CONF_THRESHOLD = 0.30   # Threshold for the COCO person detector
+# =============================================================================
+# Visual Style
+# =============================================================================
 
-# Supported image and video extensions
-IMAGE_EXTENSIONS    = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".avif"}
-VIDEO_EXTENSIONS    = {".mp4", ".avi", ".mov", ".mkv"}
-
- # Color palette for rendering worker boxes based on compliance status
-
-COLOUR_COMPLIANT     = (94,  197,  34)   # Green  — all rules passed
-COLOUR_ALERT         = (8,   179, 234)   # Yellow — critical OK, high-severity alerts
-COLOUR_VIOLATION     = (68,   68, 239)   # Red    — critical rule failed
-COLOUR_UNVERIFIABLE  = (22,  115, 249)   # Orange — low confidence
-COLOUR_PPE_BOX       = (184, 163, 148)   # Slate grey — PPE item boxes
-COLOUR_SAFE_BG       = (94,  197,  34)   # Green
-COLOUR_ALERT_BG      = (8,   179, 234)   # Yellow
-COLOUR_UNSAFE_BG     = (68,   68, 239)   # Red
-COLOUR_UNVERIF_BG    = (22,  115, 249)   # Orange
-COLOUR_TEXT          = (255, 255, 255)   # White text
-COLOUR_TEXT_DARK     = (42,   23,  15)   # Dark text for light backgrounds
-
-CLASS_NAMES = {
-    0  : "Person",
-    1  : "Hardhat",
-    2  : "Safety Vest",
-    3  : "Safety Boots",
-    4  : "Safety Gloves",
-    5  : "Safety Goggles",
-    6  : "NO-Hardhat",
-    7  : "NO-Safety Vest",
-    8  : "NO-Safety Boots",
-    9  : "NO-Safety Gloves",
-    10 : "NO-Safety Goggles",
-    11 : "Mask",
+FONT   = cv2.FONT_HERSHEY_SIMPLEX
+LINE_AA = cv2.LINE_AA
+ 
+VERDICT_COLORS = {
+    "SAFE":   (34,  139,  34),   # green  (BGR)
+    "ALERT":  (0,   165, 255),   # orange
+    "UNSAFE": (0,     0, 220),   # red
 }
-
-# Detection parsing
-
-def parse_yolo_results(results) -> list[dict]:
-    """
-    Parses raw Ultralytics YOLOv8 results into a flat list of
-    detection dictionaries consumable by the compliance engine.
-
-    Parameters
-    ----------
-    results : ultralytics Results object (single image)
-
-    Returns
-    -------
-    list[dict] — each dict contains:
-        class_id, confidence, x1, y1, x2, y2
-    """
-    detections = []
-    if results.boxes is None:
-        return detections
-
-    for box in results.boxes:
-        detections.append({
-            "class_id"   : int(box.cls[0].item()),
-            "confidence" : float(box.conf[0].item()),
-            "x1"         : float(box.xyxy[0][0].item()),
-            "y1"         : float(box.xyxy[0][1].item()),
-            "x2"         : float(box.xyxy[0][2].item()),
-            "y2"         : float(box.xyxy[0][3].item()),
-        })
-    return detections
-
-def get_combined_detections(
-    frame        : "np.ndarray",
-    ppe_model    : "YOLO",
-    person_model : "YOLO",
-) -> list[dict]:
-    """
-    Two-stage detection strategy to work around sparse person annotations
-    in the custom PPE model:
-
-    Stage 1 — Person detection  : COCO-pretrained yolov8n, class 0 = person.
-                                  High recall on construction workers.
-    Stage 2 — PPE detection     : Custom model, classes 1-11 only (PPE items).
-                                  Class 0 from custom model is excluded because
-                                  it was trained on incomplete person labels.
-
-    Returns a merged flat list of detection dicts consumable by evaluate_scene().
-    """
-    # --- Stage 1: persons from COCO pretrained model ---
-    person_results = person_model(frame, conf=PERSON_CONF_THRESHOLD, verbose=False)[0]
-    person_dets = [
-        d for d in parse_yolo_results(person_results)
-        if d["class_id"] == 0   # COCO class 0 = person
-    ]
-
-    # --- Stage 2: PPE items from custom model (exclude class 0) ---
-    ppe_results = ppe_model(frame, conf=YOLO_CONF_THRESHOLD, verbose=False)[0]
-    ppe_dets = [
-        d for d in parse_yolo_results(ppe_results)
-        if d["class_id"] != 0   # skip custom-model person boxes
-    ]
-
-    return person_dets + ppe_dets
-
-
-# Rendering utilities
-
-def draw_rounded_rect(
-    frame  : np.ndarray,
-    pt1    : tuple,
-    pt2    : tuple,
-    colour : tuple,
-    radius : int = 8,
-    thickness: int = 2
-) -> np.ndarray:
-    """
-    Draws a rectangle with slightly rounded corners on the frame.
-    Falls back to a standard rectangle if radius is too large.
-    """
-    x1, y1 = int(pt1[0]), int(pt1[1])
-    x2, y2 = int(pt2[0]), int(pt2[1])
-    r = min(radius, (x2 - x1) // 2, (y2 - y1) // 2)
-
-    if r <= 0:
-        cv2.rectangle(frame, (x1, y1), (x2, y2), colour, thickness)
-        return frame
-
-    cv2.line(frame, (x1 + r, y1), (x2 - r, y1), colour, thickness)
-    cv2.line(frame, (x1 + r, y2), (x2 - r, y2), colour, thickness)
-    cv2.line(frame, (x1, y1 + r), (x1, y2 - r), colour, thickness)
-    cv2.line(frame, (x2, y1 + r), (x2, y2 - r), colour, thickness)
-    cv2.ellipse(frame, (x1+r, y1+r), (r,r), 180,  0,  90, colour, thickness)
-    cv2.ellipse(frame, (x2-r, y1+r), (r,r), 270,  0,  90, colour, thickness)
-    cv2.ellipse(frame, (x1+r, y2-r), (r,r),  90,  0,  90, colour, thickness)
-    cv2.ellipse(frame, (x2-r, y2-r), (r,r),   0,  0,  90, colour, thickness)
-    return frame
-
-
-def draw_label_pill(
-    frame      : np.ndarray,
-    text       : str,
-    position   : tuple,
-    bg_colour  : tuple,
-    font_scale : float = 0.55,
-    thickness  : int   = 1,
-    padding    : int   = 5,
-) -> np.ndarray:
-    """
-    Draws a filled pill-shaped label with text at the given position.
-    position is the top-left corner of the label.
-    """
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    (tw, th), baseline = cv2.getTextSize(text, font, font_scale, thickness)
-    x, y = int(position[0]), int(position[1])
-    cv2.rectangle(
-        frame,
-        (x, y),
-        (x + tw + padding * 2, y + th + padding * 2 + baseline),
-        bg_colour,
-        -1
-    )
-    cv2.putText(
-        frame, text,
-        (x + padding, y + th + padding),
-        font, font_scale,
-        COLOUR_TEXT, thickness, cv2.LINE_AA
-    )
-    return frame
-
-
-def render_worker_annotations(
-    frame   : np.ndarray,
-    report,
-) -> np.ndarray:
-    """
-    Renders per-worker bounding boxes and status labels onto the frame.
-    """
-    for worker in report.workers:
-        x1, y1, x2, y2 = [int(v) for v in worker.box]
-
-        # Select colour based on worker status
-        if worker.status == WorkerStatus.COMPLIANT:
-            colour = COLOUR_COMPLIANT
-            status_text = "OK"
-        elif worker.status == WorkerStatus.ALERT:
-            colour = COLOUR_ALERT
-            status_text = "ALERT"
-        elif worker.status == WorkerStatus.VIOLATION:
-            colour = COLOUR_VIOLATION
-            status_text = "VIOLATION"
-        else:
-            colour = COLOUR_UNVERIFIABLE
-            status_text = "UNVERIFIABLE"
-
-        # Draw worker bounding box
-        draw_rounded_rect(frame, (x1, y1), (x2, y2), colour,
-                          radius=6, thickness=2)
-
-        # Draw worker ID + status label above the box
-        label = f"W{worker.worker_id} {status_text} {worker.confidence:.0%}"
-        label_y = max(y1 - 8, 20)
-        draw_label_pill(frame, label, (x1, label_y - 22),
-                        bg_colour=colour, font_scale=0.50)
-
-        # Draw individual violation/alert tags below the worker box
-        tag_y = y2 + 6
-        for violation in worker.violations:
-            tag_text = f"! {violation.rule_id}: {violation.rule_name}"
-            tag_colour = (
-                COLOUR_ALERT if worker.status == WorkerStatus.ALERT
-                else COLOUR_VIOLATION
-            )
-            draw_label_pill(frame, tag_text, (x1, tag_y),
-                            bg_colour=tag_colour,
-                            font_scale=0.42)
-            tag_y += 22
-
-    return frame
-
-
-def render_ppe_detections(
-    frame      : np.ndarray,
-    detections : list[dict],
-) -> np.ndarray:
-    """
-    Renders all non-person detection boxes as thin grey labels.
-    Provides visual context for PPE items detected in the scene.
-    """
-    for det in detections:
-        if det["class_id"] == 0:   # Skip person boxes — handled separately
-            continue
-        if det["confidence"] < 0.25:
-            continue
-        x1, y1, x2, y2 = [int(det[k]) for k in ("x1", "y1", "x2", "y2")]
-        class_name = CLASS_NAMES.get(det["class_id"], str(det["class_id"]))
-        conf = det["confidence"]
-        cv2.rectangle(frame, (x1, y1), (x2, y2), COLOUR_PPE_BOX, 1)
-        draw_label_pill(
-            frame,
-            f"{class_name} {conf:.0%}",
-            (x1, y1),
-            bg_colour=COLOUR_PPE_BOX,
-            font_scale=0.38,
-        )
-    return frame
-
-
-def render_scene_verdict_banner(
-    frame  : np.ndarray,
-    report,
-) -> np.ndarray:
-    """
-    Renders a scene-level verdict banner at the top of the frame.
-    Includes verdict, worker counts, and timestamp.
-    """
-    h, w = frame.shape[:2]
-    banner_height = 52
-
-    # Select banner colour
-    if report.scene_verdict == SceneVerdict.SAFE:
-        bg_colour   = COLOUR_SAFE_BG
-        verdict_str = "SCENE: SAFE"
-    elif report.scene_verdict == SceneVerdict.ALERT:
-        bg_colour   = COLOUR_ALERT_BG
-        verdict_str = "SCENE: ALERT"
-    elif report.scene_verdict == SceneVerdict.UNSAFE:
-        bg_colour   = COLOUR_UNSAFE_BG
-        verdict_str = "SCENE: UNSAFE"
-    else:
-        bg_colour   = COLOUR_UNVERIF_BG
-        verdict_str = "SCENE: UNVERIFIABLE"
-
-    # Draw banner background
-    cv2.rectangle(frame, (0, 0), (w, banner_height), bg_colour, -1)
-
-    # Verdict text
-    cv2.putText(
-        frame, verdict_str,
-        (12, 32),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.85,
-        COLOUR_TEXT, 2, cv2.LINE_AA
-    )
-
-    # Worker summary (right-aligned)
-    summary = (
-        f"Workers: {report.total_workers}  "
-        f"OK: {report.compliant_count}  "
-        f"Alerts: {report.alert_count}  "
-        f"Violations: {report.violation_count}  "
-        f"Unverifiable: {report.unverifiable_count}"
-    )
-    (tw, _), _ = cv2.getTextSize(
-        summary, cv2.FONT_HERSHEY_SIMPLEX, 0.48, 1
-    )
-    cv2.putText(
-        frame, summary,
-        (w - tw - 12, 32),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.48,
-        COLOUR_TEXT, 1, cv2.LINE_AA
-    )
-
-    return frame
-
-
-def annotate_frame(
-    frame      : np.ndarray,
-    detections : list[dict],
-    report,
-) -> np.ndarray:
-    """
-    Full annotation pipeline for a single frame.
-    Applies PPE boxes, worker boxes, and scene verdict banner.
-    """
-    frame = render_ppe_detections(frame, detections)
-    frame = render_worker_annotations(frame, report)
-    frame = render_scene_verdict_banner(frame, report)
-    return frame
-
-
-# Report saving
-
-def save_json_report(report, output_dir: Path) -> Path:
-    """
-    Saves the SceneReport as a JSON file to the reports directory.
-    Returns the path to the saved file.
-    """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    stem = Path(report.image_name).stem
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    report_path = output_dir / f"{stem}_{timestamp}_report.json"
-    with open(report_path, "w") as f:
-        json.dump(report.to_dict(), f, indent=2)
-    return report_path
-
-
-# Main inference pipeline
-
-def run_on_image(
-    model        : YOLO,
-    image_path   : Path,
-    output_dir   : Path,
-    report_dir   : Path,
-    show         : bool = False,
-    person_model : YOLO = None,
-) -> dict:
-    """
-    Runs the full inference + compliance pipeline on a single image.
-    Returns a summary dictionary.
-    """
-    frame = cv2.imread(str(image_path))
-    if frame is None:
-        print(f"[WARN] Could not read image: {image_path}")
-        return {}
-
-    # Run detection — two-stage if person_model provided, single otherwise
-    if person_model is not None:
-        detections = get_combined_detections(frame, model, person_model)
-    else:
-        results    = model(frame, conf=YOLO_CONF_THRESHOLD, verbose=False)[0]
-        detections = parse_yolo_results(results)
-
-    # Run compliance engine
-    report       = evaluate_scene(detections, image_name=image_path.name)
-
-    # Annotate frame
-    annotated    = annotate_frame(frame.copy(), detections, report)
-
-    # Save annotated image
-    output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = output_dir / f"pred_{image_path.name}"
-    cv2.imwrite(str(out_path), annotated)
-
-    # Save JSON report
-    report_path  = save_json_report(report, report_dir)
-
-    # Console summary
-    print(
-        f"[{report.scene_verdict.value:12s}] {image_path.name} | "
-        f"Workers: {report.total_workers} | "
-        f"Alerts: {report.alert_count} | "
-        f"Violations: {report.violation_count} | "
-        f"Saved → {out_path.name}"
-    )
-
-    if show:
-        cv2.imshow("PPE Compliance Monitor", annotated)
-        cv2.waitKey(0)
-
-    return report.to_dict()
-
-
-def run_on_directory(
-    model        : YOLO,
-    source_dir   : Path,
-    output_dir   : Path,
-    report_dir   : Path,
-    show         : bool = False,
-    person_model : YOLO = None,
-) -> list[dict]:
-    """
-    Runs inference on all images in a directory.
-    Returns a list of report dictionaries.
-    """
-    image_paths = [
-        p for p in sorted(source_dir.iterdir())
-        if p.suffix.lower() in IMAGE_EXTENSIONS
-    ]
-
-    if not image_paths:
-        print(f"[WARN] No images found in {source_dir}")
-        return []
-
-    print(f"[INFO] Processing {len(image_paths)} images from {source_dir}")
-    all_reports = []
-    for img_path in image_paths:
-        report = run_on_image(model, img_path, output_dir, report_dir, show,
-                              person_model=person_model)
-        if report:
-            all_reports.append(report)
-
-    # Save combined summary report
-    summary_path = report_dir / "batch_summary.json"
-    with open(summary_path, "w") as f:
-        json.dump(all_reports, f, indent=2)
-    print(f"\n[INFO] Batch complete. Summary saved → {summary_path}")
-
-    total_violations = sum(r.get("violation_count", 0) for r in all_reports)
-    print(f"[INFO] Total scenes processed : {len(all_reports)}")
-    print(f"[INFO] Total violations found : {total_violations}")
-
-    return all_reports
-
-
-def run_on_video(
-    model        : YOLO,
-    video_path   : Path,
-    output_dir   : Path,
-    report_dir   : Path,
-    show         : bool = False,
-    person_model : YOLO = None,
-) -> None:
-    """
-    Runs inference on a video file frame by frame.
-    Saves annotated output video and per-frame reports.
-    """
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        print(f"[ERROR] Could not open video: {video_path}")
-        return
-
-    fps    = cap.get(cv2.CAP_PROP_FPS)
-    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    out_video_path = output_dir / f"pred_{video_path.name}"
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(str(out_video_path), fourcc, fps, (width, height))
-
-    print(f"[INFO] Processing video: {video_path.name} "
-          f"({total} frames @ {fps:.1f} fps)")
-
-    frame_idx   = 0
-    all_reports = []
-    start_time  = time.time()
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        if person_model is not None:
-            detections = get_combined_detections(frame, model, person_model)
-        else:
-            results    = model(frame, conf=YOLO_CONF_THRESHOLD, verbose=False)[0]
-            detections = parse_yolo_results(results)
-        report     = evaluate_scene(
-            detections,
-            image_name=f"{video_path.stem}_frame_{frame_idx:05d}"
-        )
-        annotated  = annotate_frame(frame.copy(), detections, report)
-        writer.write(annotated)
-        all_reports.append(report.to_dict())
-
-        if show:
-            cv2.imshow("PPE Compliance Monitor", annotated)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
-
-        frame_idx += 1
-        if frame_idx % 50 == 0:
-            elapsed = time.time() - start_time
-            print(f"[INFO] Frame {frame_idx}/{total} "
-                  f"({frame_idx/elapsed:.1f} fps processed)")
-
-    cap.release()
-    writer.release()
-    cv2.destroyAllWindows()
-
-    # Save combined video report
-    report_path = report_dir / f"{video_path.stem}_video_report.json"
-    with open(report_path, "w") as f:
-        json.dump(all_reports, f, indent=2)
-
-    print(f"[INFO] Video processing complete.")
-    print(f"[INFO] Annotated video saved → {out_video_path}")
-    print(f"[INFO] Video report saved    → {report_path}")
-
-
-
-def run_on_webcam(model: YOLO, show: bool = True, person_model: YOLO = None) -> None:
-    """
-    Runs live inference on webcam feed (device 0).
-    Press Q to quit.
-    """
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("[ERROR] Could not open webcam.")
-        return
-
-    print("[INFO] Webcam active. Press Q to quit.")
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        if person_model is not None:
-            detections = get_combined_detections(frame, model, person_model)
-        else:
-            results    = model(frame, conf=YOLO_CONF_THRESHOLD, verbose=False)[0]
-            detections = parse_yolo_results(results)
-        report     = evaluate_scene(detections, image_name="webcam_frame")
-        annotated  = annotate_frame(frame.copy(), detections, report)
-
-        cv2.imshow("PPE Compliance Monitor — Live", annotated)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-
-
-# Entry point
+ 
+# Per-class PPE bounding-box colours (BGR)
+PPE_COLORS = {
+    "person":  (255, 255, 255),
+    "helmat":  (0,   255, 255),
+    "vest":    (0,   165, 255),
+    "boot":    (255, 144,  30),
+    "gloves":  (147,  20, 255),
+    "goggles": (0,   255,   0)
+}
+ 
+# Human-readable display names (model class → label)
+DISPLAY_NAMES = {
+    "helmat":  "Helmet",
+    "vest":    "Vest",
+    "boot":    "Boots",
+    "gloves":  "Gloves",
+    "goggles": "Goggles",
+}
+ 
+ 
+# PPE Status box layout constants
+LINE_H  = 16     # pixels per text line
+BOX_W   = 240    # fixed width of PPE status box
+MAX_VIS = 420    # max visible height before scrollbar appears
+
+
+# =============================================================================
+# Layer 1 — Argument Parser
+# =============================================================================
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="PPE Compliance Inference — Construction Safety Monitor"
+    parser = argparse.ArgumentParser(description="PPE Compliance Inference")
+
+    parser.add_argument(
+        "--weights", type=str, required=True,
+        help="Path to trained YOLOv8s weights (best.pt)"
     )
     parser.add_argument(
-        "--source",
-        type=str,
-        required=True,
-        help="Input source: image path, directory, video file, or '0' for webcam."
+        "--source", type=str, required=True,
+        help="Input: image path, video path, or 0 for webcam"
     )
     parser.add_argument(
-        "--weights",
-        type=str,
-        default=str(DEFAULT_WEIGHTS),
-        help=f"Path to YOLOv8 model weights. Default: {DEFAULT_WEIGHTS}"
+        "--output", type=str, default=None,
+        help="Save path for annotated output (optional)"
     )
     parser.add_argument(
-        "--output",
-        type=str,
-        default=str(OUTPUT_IMAGES_DIR),
-        help=f"Directory for annotated output images/video. "
-             f"Default: {OUTPUT_IMAGES_DIR}"
+        "--conf", type=float, default=0.25,
+        help="Detection confidence threshold (default: 0.25)"
     )
-    parser.add_argument(
-        "--reports",
-        type=str,
-        default=str(OUTPUT_REPORTS_DIR),
-        help=f"Directory for JSON violation reports. "
-             f"Default: {OUTPUT_REPORTS_DIR}"
-    )
-    parser.add_argument(
-        "--show",
-        action="store_true",
-        help="Display output frames in a window during inference."
-    )
+
     return parser.parse_args()
 
 
-def main():
-    args        = parse_args()
-    source      = args.source
-    weights     = Path(args.weights)
-    output_dir  = Path(args.output)
-    report_dir  = Path(args.reports)
+# =============================================================================
+# Layer 2 — Model Loader
+# =============================================================================
 
-    # Load PPE model
-    print(f"[INFO] Loading PPE model weights from: {weights}")
-    model = YOLO(str(weights))
-    print(f"[INFO] PPE model loaded successfully.")
+def load_model(weights_path: str) -> YOLO:
+    path = Path(weights_path)
+    if not path.exists():
+        print(f"[ERROR] Weights not found: {path}")
+        sys.exit(1)
 
-    # Load COCO-pretrained person detector (auto-downloads yolov8n.pt if absent)
-    print(f"[INFO] Loading COCO person detector: {PERSON_WEIGHTS}")
-    person_model = YOLO(PERSON_WEIGHTS)
-    print(f"[INFO] Person detector loaded. Two-stage detection enabled.")
+    model = YOLO(str(path))
+    print(f"Model loaded: {path}")
+    return model
 
-    # Route to appropriate runner
-    if source == "0":
-        run_on_webcam(model, show=True, person_model=person_model)
 
-    else:
-        source_path = Path(source)
+# =============================================================================
+# Layer 3 — Detection Converter
+# =============================================================================
 
-        if not source_path.exists():
-            print(f"[ERROR] Source path does not exist: {source_path}")
-            return
+def results_to_detections(results, class_names: list) -> list:
+    """
+    Convert raw Ultralytics results into the flat detection dict list
+    that compliance.py expects.
 
-        if source_path.is_dir():
-            run_on_directory(model, source_path, output_dir,
-                             report_dir, args.show, person_model=person_model)
+    Returns:
+        [{"class_name": str, "bbox": [x1,y1,x2,y2], "confidence": float}, ...]
+    """
+    detections = []
+    for box in results.boxes:
+        cls_idx    = int(box.cls[0])
+        confidence = float(box.conf[0])
+        x1, y1, x2, y2 = box.xyxy[0].tolist()
 
-        elif source_path.suffix.lower() in VIDEO_EXTENSIONS:
-            run_on_video(model, source_path, output_dir,
-                         report_dir, args.show, person_model=person_model)
+        detections.append({
+            "class_name": class_names[cls_idx],
+            "bbox":       [x1, y1, x2, y2],
+            "confidence": confidence,
+        })
+    return detections
 
-        elif source_path.suffix.lower() in IMAGE_EXTENSIONS:
-            run_on_image(model, source_path, output_dir,
-                         report_dir, args.show, person_model=person_model)
+# =============================================================================
+# Drawing utilities
+# =============================================================================
 
+def _put(img, text, x, y, scale, color, thickness=1):
+    cv2.putText(img, text, (x, y), FONT, scale, color, thickness, LINE_AA)
+ 
+ 
+def _rounded_fill(img, x1, y1, x2, y2, fill, border, alpha=0.82, r=8):
+    """
+    Draw a semi-transparent filled rounded rectangle on img in-place.
+    Approximated with rectangles + corner circles.
+    """
+    overlay = img.copy()
+    cv2.rectangle(overlay, (x1 + r, y1),     (x2 - r, y2),     fill, -1)
+    cv2.rectangle(overlay, (x1,     y1 + r), (x2,     y2 - r), fill, -1)
+    for cx, cy in [(x1+r, y1+r), (x2-r, y1+r),
+                   (x1+r, y2-r), (x2-r, y2-r)]:
+        cv2.circle(overlay, (cx, cy), r, fill, -1)
+    cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
+    cv2.rectangle(img, (x1, y1), (x2, y2), border, 1)
+ 
+ 
+def _wrap(text: str, width: int) -> list:
+    """Word-wrap text to at most `width` characters per line."""
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        if len(cur) + len(w) + 1 <= width:
+            cur = (cur + " " + w).strip()
         else:
-            print(f"[ERROR] Unsupported file type: {source_path.suffix}")
+            if cur:
+                lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines or [text]
+ 
+
+# =============================================================================
+# Layer 4a — PPE detection boxes on the frame
+# =============================================================================
+
+def _draw_ppe_boxes(frame: np.ndarray, detections: list) -> None:
+    for det in detections:
+        cls = det["class_name"]
+        if cls == "person":
+            continue
+        if det["confidence"] < CONF_THRESHOLDS.get(cls, 0.25):
+            continue
+        x1, y1, x2, y2 = [int(v) for v in det["bbox"]]
+        color = PPE_COLORS.get(cls, (200, 200, 200))
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(frame, DISPLAY_NAMES.get(cls, cls),
+                    (x1 + 3, y1 - 5), FONT, 0.40, color, 1, LINE_AA)
+ 
+ 
+def _draw_worker_borders(frame: np.ndarray, report: dict) -> None:
+    """
+    For each detected worker draw:
+      • A 3-pixel coloured border (green/orange/red based on compliance)
+      • A small filled worker-ID badge (W0, W1 …) at the top-left of the bbox,
+        colour-coded per worker so the viewer can match the panel to the person.
+    """
+    for worker in report["workers"]:
+        wid  = worker["worker_id"]
+        x1, y1, x2, y2 = [int(v) for v in worker["bbox"]]
+ 
+        status = ("SAFE"  if worker["compliant"] and not worker["alerts"] else
+                  "ALERT" if worker["compliant"] else "UNSAFE")
+        v_col  = VERDICT_COLORS[status]
+
+        # Compliance-coloured border
+        cv2.rectangle(frame, (x1, y1), (x2, y2), v_col, 3)
+
+        # Worker ID badge — same colour as the compliance border (no per-worker colours)
+        badge = f" W{wid} "
+        (bw, bh), _ = cv2.getTextSize(badge, FONT, 0.50, 1)
+        bx1 = x1
+        by1 = max(0, y1 - bh - 6)
+        bx2 = x1 + bw + 4
+        by2 = y1
+        cv2.rectangle(frame, (bx1, by1), (bx2, by2), v_col, -1)
+        cv2.putText(frame, badge, (bx1 + 2, by2 - 3),
+                    FONT, 0.50, (0, 0, 0), 1, LINE_AA)
+
+# =============================================================================
+# Layer 4b — Verdict overlay box
+# =============================================================================
+ 
+def _draw_verdict_box(img: np.ndarray, report: dict, x: int, y: int):
+    """
+    Draw the verdict box at (x, y).
+    Fixed size: 210 × 88 px.
+    Returns (x1, y1, x2, y2).
+    """
+    verdict = report["scene_verdict"]
+    if not verdict:
+        return (x, y, x + 210, y + 88)
+ 
+    v_col = VERDICT_COLORS.get(verdict, (100, 100, 100))
+    W, H  = 210, 88
+ 
+    _rounded_fill(img, x, y, x + W, y + H, (18, 18, 18), v_col)
+ 
+    # Coloured square indicator
+    sq = 14
+    cv2.rectangle(img, (x + 10, y + 10), (x + 10 + sq, y + 10 + sq), v_col, -1)
+ 
+    # Verdict text
+    _put(img, verdict, x + 32, y + 22, 0.65, v_col, 2)
+ 
+    # Divider
+    cv2.line(img, (x + 8, y + 32), (x + W - 8, y + 32), (70, 70, 70), 1)
+ 
+    # Counts
+    _put(img, f"Workers  : {report['total_workers']}",
+         x + 10, y + 50, 0.42, (210, 210, 210))
+    _put(img, f"Compliant: {report['compliant_workers']}",
+         x + 10, y + 68, 0.42, (210, 210, 210))
+ 
+    return (x, y, x + W, y + H)
+ 
+ 
+
+
+# =============================================================================
+# Layer 4c — PPE Status overlay box  (scrollable)
+# =============================================================================
+ 
+def _build_ppe_lines(report: dict) -> list:
+    """
+    Build the list of (text, color, bold) tuples that make up the PPE panel.
+    One block per worker: header → OK items → violations → alerts → spacer.
+    """
+    RED  = (80,  80,  220)
+    ORG  = (0,  165,  255)
+    GRAY = (170, 170, 170)
+ 
+    lines = []
+    for worker in report["workers"]:
+        wid    = worker["worker_id"]
+        status = ("SAFE"  if worker["compliant"] and not worker["alerts"] else
+                  "ALERT" if worker["compliant"] else "UNSAFE")
+
+        # Worker header — coloured by compliance status, not by worker index
+        lines.append((f"W{wid}  {status}", VERDICT_COLORS.get(status, (230, 230, 230)), True))
+ 
+        # Detected OK
+        detected = ", ".join(
+            DISPLAY_NAMES.get(p, p) for p in worker["ppe_detected"]
+        ) or "none"
+        for chunk in _wrap(f"OK: {detected}", 28):
+            lines.append((chunk, GRAY, False))
+ 
+        # Violations (critical)
+        for item in worker["violations"]:
+            lines.append((f"X  {DISPLAY_NAMES.get(item, item)} missing",
+                          RED, False))
+ 
+        # Alerts (advisory)
+        for item in worker["alerts"]:
+            lines.append((f"!  {DISPLAY_NAMES.get(item, item)} missing",
+                          ORG, False))
+ 
+        lines.append(("", (50, 50, 50), False))   # spacer row
+ 
+    return lines
+ 
+ 
+def _draw_ppe_status_box(img: np.ndarray, report: dict, x: int, y: int):
+    """
+    Draw the PPE Status box at (x, y).
+    Width is fixed at BOX_W. Height is capped at MAX_VIS; overflow is
+    indicated by a "+N more" label — no scrollbar.
+    Returns (x1, y1, x2, y2).
+    """
+    all_lines = _build_ppe_lines(report)
+    total_h   = 28 + len(all_lines) * LINE_H + 10
+    visible_h = min(total_h, MAX_VIS)
+    W         = BOX_W
+
+    _rounded_fill(img, x, y, x + W, y + visible_h, (18, 18, 18), (90, 90, 90))
+
+    # Header
+    _put(img, "PPE Status", x + 10, y + 16, 0.48, (230, 230, 230), 1)
+    cv2.line(img, (x + 6, y + 22), (x + W - 6, y + 22), (70, 70, 70), 1)
+
+    cy    = y + 28
+    limit = y + visible_h - 4
+
+    for i, (text, color, bold) in enumerate(all_lines):
+        if cy + LINE_H > limit:
+            remaining = len(all_lines) - i
+            _put(img, f"... +{remaining} more",
+                 x + 10, limit, 0.34, (120, 120, 120))
+            break
+
+        if text == "":
+            cv2.line(img, (x + 8, cy + 4), (x + W - 8, cy + 4),
+                     (50, 50, 50), 1)
+            cy += LINE_H // 2
+            continue
+
+        if bold:
+            sq = 9
+            cv2.rectangle(img,
+                          (x + 10, cy - 8),
+                          (x + 10 + sq, cy - 8 + sq),
+                          color, -1)
+            _put(img, text, x + 24, cy, 0.40, color, 2)
+        else:
+            _put(img, text, x + 12, cy, 0.37, color, 1)
+
+        cy += LINE_H
+
+    return (x, y, x + W, y + visible_h)
+
+
+# =============================================================================
+# Layer 4d — Full frame annotation
+# =============================================================================
+ 
+def annotate_frame(frame: np.ndarray, detections: list, report: dict, draw_overlays: bool = True) -> np.ndarray:
+    """
+    Compose the full annotated frame:
+      1. PPE bounding boxes
+      2. Worker borders + ID badges
+      3. Verdict overlay box  (position from _state)
+      4. PPE Status overlay box  (position + scroll from _state)
+    """
+    out = frame.copy()
+    _draw_ppe_boxes(out, detections)
+    _draw_worker_borders(out, report)
+    if draw_overlays:
+        _draw_verdict_box(out, report, *_state["verdict_pos"])
+        _draw_ppe_status_box(out, report, *_state["ppe_pos"])
+    return out
+
+
+_state = {
+    "verdict_pos": [10, 10],    # [x, y] top-left of verdict box
+    "ppe_pos":     [10, 108],   # [x, y] top-left of PPE status box
+    "drag":        None,        # "verdict" | "ppe" | None
+    "ox": 0, "oy": 0,           # drag offset (mouse → box origin)
+    "img_shape":   (480, 640),  # (H, W) of the display frame
+}
+ 
+ 
+def _mouse_cb(event, mx, my, _flags, param):
+    """
+    OpenCV mouse callback — handles click-drag for both overlay boxes.
+    """
+    report = param["report"]
+    s      = _state
+
+    vx, vy = s["verdict_pos"]
+    px, py = s["ppe_pos"]
+
+    v_rect = (vx, vy, vx + 210, vy + 88)
+
+    all_lines = _build_ppe_lines(report)
+    ph = min(28 + len(all_lines) * LINE_H + 10, MAX_VIS)
+    p_rect = (px, py, px + BOX_W, py + ph)
+
+    def _inside(rect, x, y):
+        return rect[0] <= x <= rect[2] and rect[1] <= y <= rect[3]
+
+    img_h, img_w = s["img_shape"]
+
+    if event == cv2.EVENT_LBUTTONDOWN:
+        if _inside(v_rect, mx, my):
+            s["drag"] = "verdict"
+            s["ox"]   = mx - vx
+            s["oy"]   = my - vy
+        elif _inside(p_rect, mx, my):
+            s["drag"] = "ppe"
+            s["ox"]   = mx - px
+            s["oy"]   = my - py
+
+    elif event == cv2.EVENT_MOUSEMOVE and s["drag"]:
+        key = s["drag"]
+        bw  = 210  if key == "verdict" else BOX_W
+        bh  = 88   if key == "verdict" else ph
+        nx  = max(0, min(mx - s["ox"], img_w - bw))
+        ny  = max(0, min(my - s["oy"], img_h - bh))
+        s[f"{key}_pos"] = [nx, ny]
+
+    elif event == cv2.EVENT_LBUTTONUP:
+        s["drag"] = None
+ 
+
+
+# =============================================================================
+# Layer 5 — Single Image Pipeline
+# =============================================================================
+
+def run_on_image(model: YOLO, source: str, output: str, conf: float) -> None:
+    frame = cv2.imread(source)
+    if frame is None:
+        print(f"[ERROR] Cannot read image: {source}")
+        sys.exit(1)
+ 
+    results    = model.predict(source, conf=conf, verbose=False)[0]
+    detections = results_to_detections(results, model.names)
+    report     = check_compliance(detections)
+ 
+    _print_report(report)
+ 
+    if output:
+        # Non-interactive — render once at default box positions and save
+        annotated = annotate_frame(frame, detections, report)
+        cv2.imwrite(output, annotated)
+        print(f"Saved: {output}")
+    else:
+        # Interactive window with draggable boxes
+        win = "PPE Compliance"
+        cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+
+ 
+        h, w = frame.shape[:2]
+        MAX_H, MAX_W = 900, 1400
+        if h > MAX_H or w > MAX_W:
+            scale = min(MAX_H / h, MAX_W / w)
+            frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
+            for det in detections:
+                det["bbox"] = [v * scale for v in det["bbox"]]
+            report = check_compliance(detections)
+
+        _state["img_shape"] = frame.shape[:2]
+        cv2.resizeWindow(win, frame.shape[1], frame.shape[0])
+        cv2.setMouseCallback(win, _mouse_cb, {"report": report})
+
+        print("Drag boxes with mouse  |  Hover PPE box + scroll wheel to scroll  |  Q or ESC to quit")
+        while True:
+            annotated = annotate_frame(frame, detections, report)
+            cv2.imshow(win, annotated)
+            key = cv2.waitKey(30) & 0xFF
+            if key in (ord("q"), 27):
+                break
+ 
+        cv2.destroyAllWindows()
+
+
+# =============================================================================
+# Layer 6 — Video / Webcam Pipeline
+# =============================================================================
+
+def run_on_video(model: YOLO, source: str, output: str, conf: float) -> None:
+    cap_source = int(source) if source.isdigit() else source
+    cap = cv2.VideoCapture(cap_source)
+ 
+    if not cap.isOpened():
+        print(f"[ERROR] Cannot open source: {source}")
+        sys.exit(1)
+ 
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25
+    w   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    # Compute display scale once — only applied to the live window, not the saved file
+    MAX_DISP_H, MAX_DISP_W = 900, 1400
+    display_scale = 1.0
+    disp_w, disp_h = w, h
+    if not output and (h > MAX_DISP_H or w > MAX_DISP_W):
+        display_scale = min(MAX_DISP_H / h, MAX_DISP_W / w)
+        disp_w = int(w * display_scale)
+        disp_h = int(h * display_scale)
+    _state["img_shape"] = (disp_h, disp_w)
+
+    writer = None
+    if output:
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(output, fourcc, fps, (w, h))
+
+    win = "PPE Compliance"
+    if not output:
+        cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(win, disp_w, disp_h)
+
+    live_report: dict = {
+        "scene_verdict": "",
+        "total_workers": 0,
+        "compliant_workers": 0,
+        "workers": [],
+    }
+
+    first_frame = True
+    print("Running — press Q or ESC to quit.")
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        results    = model.predict(frame, conf=conf, verbose=False)[0]
+        detections = results_to_detections(results, model.names)
+        report     = check_compliance(detections)
+
+        if writer:
+            # Save full-resolution annotated frame to file
+            writer.write(annotate_frame(frame, detections, report))
+        else:
+            # Scale frame and bboxes for the display window
+            if display_scale != 1.0:
+                disp_frame = cv2.resize(frame, (disp_w, disp_h))
+                disp_dets  = [dict(d, bbox=[v * display_scale for v in d["bbox"]]) for d in detections]
+                disp_rep   = check_compliance(disp_dets)
+            else:
+                disp_frame, disp_dets, disp_rep = frame, detections, report
+
+            live_report.update(disp_rep)
+
+            if first_frame:
+                cv2.setMouseCallback(win, _mouse_cb, {"report": live_report})
+                first_frame = False
+                print("Drag boxes with mouse  |  Scroll wheel on PPE box  |  Q or ESC to quit")
+
+            cv2.imshow(win, annotate_frame(disp_frame, disp_dets, disp_rep))
+            if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+                break
+ 
+    cap.release()
+    if writer:
+        writer.release()
+        print(f"Saved: {output}")
+    cv2.destroyAllWindows()
+
+# =============================================================================
+# Utility — Console Report
+# =============================================================================
+
+def _print_report(report: dict) -> None:
+    print("\n" + "=" * 50)
+    print(f"  Scene Verdict : {report['scene_verdict']}")
+    print(f"  Workers       : {report['total_workers']}")
+    print(f"  Compliant     : {report['compliant_workers']}")
+    for w in report["workers"]:
+        status = "SAFE" if w["compliant"] and not w["alerts"] else \
+                 "ALERT" if w["compliant"] else "UNSAFE"
+        print(f"\n  Worker {w['worker_id']} — {status}")
+        print(f"    PPE detected : {', '.join(w['ppe_detected']) or 'none'}")
+        if w["violations"]:
+            print(f"    Violations   : {', '.join(w['violations'])}")
+        if w["alerts"]:
+            print(f"    Alerts       : {', '.join(w['alerts'])}")
+    print("=" * 50 + "\n")
+
+
+# =============================================================================
+# Layer 7 — Main
+# =============================================================================
+
+def main():
+    args = parse_args()
+    model = load_model(args.weights)
+
+    # Route to image or video pipeline based on source type
+    source = args.source
+    if source.isdigit():
+        run_on_video(model, source, args.output, args.conf)
+    else:
+        ext = Path(source).suffix.lower()
+        if ext in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
+            run_on_image(model, source, args.output, args.conf)
+        elif ext in {".mp4", ".avi", ".mov", ".mkv"}:
+            run_on_video(model, source, args.output, args.conf)
+        else:
+            print(f"[ERROR] Unsupported source format: {ext}")
+            sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,61 @@
+{
+  "data_yaml": "G:\\Projects\\Construction-Safety-Monitor\\data\\raw\\data.yaml",
+  "classes": [
+    "belt",
+    "boot",
+    "gloves",
+    "goggles",
+    "helmat",
+    "person",
+    "vest"
+  ],
+  "splits": {
+    "train": {
+      "images": 350,
+      "labels": 350,
+      "images_dir": "G:\\Projects\\Construction-Safety-Monitor\\data\\raw\\train\\images",
+      "labels_dir": "G:\\Projects\\Construction-Safety-Monitor\\data\\raw\\train\\labels",
+      "class_counts": {
+        "vest": 243,
+        "person": 342,
+        "boot": 212,
+        "helmat": 309,
+        "gloves": 307,
+        "belt": 19,
+        "goggles": 86
+      }
+    },
+    "val": {
+      "images": 100,
+      "labels": 100,
+      "images_dir": "G:\\Projects\\Construction-Safety-Monitor\\data\\raw\\valid\\images",
+      "labels_dir": "G:\\Projects\\Construction-Safety-Monitor\\data\\raw\\valid\\labels",
+      "class_counts": {
+        "person": 85,
+        "vest": 52,
+        "boot": 63,
+        "helmat": 97,
+        "gloves": 95,
+        "goggles": 31,
+        "belt": 5
+      }
+    },
+    "test": {
+      "images": 50,
+      "labels": 50,
+      "images_dir": "G:\\Projects\\Construction-Safety-Monitor\\data\\raw\\test\\images",
+      "labels_dir": "G:\\Projects\\Construction-Safety-Monitor\\data\\raw\\test\\labels",
+      "class_counts": {
+        "helmat": 46,
+        "belt": 3,
+        "person": 52,
+        "vest": 27,
+        "boot": 21,
+        "gloves": 48,
+        "goggles": 16
+      }
+    }
+  },
+  "errors": [],
+  "passed": true
+}
